@@ -1,0 +1,8 @@
+{
+  "projectName": "seans-bots",
+  "backend": {
+    "type": "cloudflare",
+    "package": "@positronic/cloudflare"
+  },
+  "version": "1"
+}

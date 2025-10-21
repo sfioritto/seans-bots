@@ -1,0 +1,27 @@
+# Dependency directories
+node_modules/
+
+# --- Positronic Specific --- #
+
+# Local development server directory
+.positronic/
+.env
+
+# Cloudflare Wrangler state and temp files
+.wrangler/
+
+# Generated TypeScript resource types (uncomment to ignore)
+# resources.d.ts
+
+# Mac specific
+.DS_Store
+
+dist/
+
+# Test coverage
+coverage/
+
+.positronic-server.log
+.positronic-server.pid
+
+resources.d.ts
