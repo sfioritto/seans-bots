@@ -106,6 +106,30 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       throw new Error('SLACK_BOT_TOKEN is not set');
     }
 
+    // First, post the intro message
+    const introResponse = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${slackBotToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: slackChannelId,
+        text: `Hey, can you review this and give me your feedback before I post it? 🧵`,
+      }),
+    });
+
+    const introResult = await introResponse.json();
+
+    if (!introResult.ok) {
+      console.error('Slack API error:', introResult);
+      throw new Error(`Slack API error: ${introResult.error}`);
+    }
+
+    const threadTs = introResult.ts;
+    const actualChannelId = introResult.channel;
+
+    // Now post the draft content as a threaded reply
     // Split the post into chunks to avoid Slack's 3000 character block limit
     const postContent = state.weeklyPost.post;
     const maxChunkSize = 2900; // Leave buffer for safety
@@ -125,20 +149,12 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
     }
     if (currentChunk) chunks.push(currentChunk);
 
-    // Post the draft with instructions and a "Done" button
-    const blocks: any[] = [
-      {
-        type: 'header',
-        text: {
-          type: 'plain_text',
-          text: '📝 Weekly AI News Draft',
-        },
-      },
+    const draftBlocks: any[] = [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `Here's the first draft based on ${state.filteredArticles.length} AI-related articles from Hacker News this week:\n\n*Reply to this thread* with any changes you'd like, then click Done below.`,
+          text: `*Draft based on ${state.filteredArticles.length} AI-related articles from Hacker News this week:*`,
         },
       },
       {
@@ -148,7 +164,7 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
 
     // Add chunks as separate section blocks
     for (const chunk of chunks) {
-      blocks.push({
+      draftBlocks.push({
         type: 'section',
         text: {
           type: 'mrkdwn',
@@ -157,116 +173,64 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       });
     }
 
-    // Add final divider and button
-    blocks.push(
-      {
-        type: 'divider',
-      },
-      {
-        type: 'actions',
-        elements: [
-          {
-            type: 'button',
-            text: {
-              type: 'plain_text',
-              text: '✅ Done - regenerate with feedback',
-            },
-            style: 'primary',
-            action_id: 'submit_feedback',
-            value: 'done',
-          },
-        ],
-      }
-    );
-
-    // Send message to Slack
-    const response = await fetch('https://slack.com/api/chat.postMessage', {
+    // Post the draft as a threaded reply
+    const draftResponse = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${slackBotToken}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        channel: slackChannelId,
-        blocks,
+        channel: actualChannelId,
+        thread_ts: threadTs, // Reply in the thread
+        blocks: draftBlocks,
         text: 'Weekly AI News Draft',
       }),
     });
 
-    const result = await response.json();
+    const draftResult = await draftResponse.json();
 
-    if (!result.ok) {
-      console.error('Slack API error:', result);
-      throw new Error(`Slack API error: ${result.error}`);
+    if (!draftResult.ok) {
+      console.error('Slack API error:', draftResult);
+      throw new Error(`Slack API error: ${draftResult.error}`);
     }
 
-    const messageTs = result.ts;
-    const actualChannelId = result.channel; // Use the actual channel ID from Slack's response
-    console.log(`Sent draft message to Slack: ${messageTs} in channel ${actualChannelId}`);
+    console.log(`Posted draft in thread: ${threadTs} in channel ${actualChannelId}`);
 
-    // Wait for the "Done" button click
-    // Meanwhile, the webhook will collect thread replies with this messageTs as thread_ts
+    // Wait for the first thread reply (webhook will be triggered)
     return {
       state: {
         ...state,
-        draftMessageTs: messageTs,
-        slackChannelId: actualChannelId, // Store the actual channel ID, not the user ID
+        threadTs,
+        slackChannelId: actualChannelId,
       },
-      waitFor: [slackWebhook(`${messageTs}-submit_feedback`)],
+      waitFor: [slackWebhook(threadTs)], // Wait for thread reply
     };
   })
-  .step('Collect feedback from thread', async ({ state }) => {
-    // Fetch all thread replies to collect feedback
-    const slackBotToken = process.env.SLACK_BOT_TOKEN;
-    const response = await fetch(
-      `https://slack.com/api/conversations.replies?channel=${state.slackChannelId}&ts=${state.draftMessageTs}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${slackBotToken}`,
-        },
-      }
-    );
+  .step('Extract feedback from webhook', ({ state, response }) => {
+    // The webhook gives us the thread reply directly
+    const webhookResponse = response as any;
+    const feedbackText = webhookResponse.message.text;
 
-    const result = await response.json();
+    console.log(`Received feedback: "${feedbackText}"`);
 
-    if (!result.ok) {
-      console.error('Failed to fetch thread replies:', result);
-      throw new Error(`Slack API error: ${result.error}`);
-    }
-
-    // Filter out the original message and bot messages, keep only user feedback
-    const feedbackMessages = result.messages
-      .filter((msg: any) => msg.ts !== state.draftMessageTs && !msg.bot_id)
-      .map((msg: any) => ({
-        text: msg.text,
-        ts: msg.ts,
-      }));
-
-    console.log(`Collected ${feedbackMessages.length} feedback messages`);
+    // Package it in the format expected by the regeneration prompt
+    const feedbackMessages = [{
+      text: feedbackText,
+      ts: webhookResponse.message.ts,
+    }];
 
     return {
       ...state,
       feedbackMessages,
     };
   })
-  .step('Check if regeneration needed', ({ state }) => {
-    // If there's no feedback, skip regeneration
-    if (!state.feedbackMessages || state.feedbackMessages.length === 0) {
-      console.log('No feedback received, using original draft');
-      return state;
-    }
-
-    console.log(`Will regenerate post with ${state.feedbackMessages.length} feedback messages`);
+  .step('Prepare for regeneration', ({ state }) => {
+    console.log(`Regenerating post with feedback`);
     return state;
   })
   .prompt('Regenerate with feedback', {
     template: (state: any) => {
-      // If no feedback, just return the original post
-      if (!state.feedbackMessages || state.feedbackMessages.length === 0) {
-        return generateWeeklyPostPrompt.template({ filteredArticles: state.filteredArticles });
-      }
-
-      // Otherwise regenerate with feedback
       return generateWeeklyPostPrompt.template({
         filteredArticles: state.filteredArticles,
         previousDraft: state.weeklyPost.post,

@@ -40,8 +40,8 @@ export const slackWebhook = createWebhook(
         const event = payload.event;
 
         // Handle message events in threads
-        if (event.type === 'message' && event.thread_ts && !event.subtype) {
-          // This is a reply to a thread
+        if (event.type === 'message' && event.thread_ts && !event.subtype && !event.bot_id) {
+          // This is a reply to a thread from a human user (not a bot)
           return {
             type: 'webhook' as const,
             identifier: event.thread_ts, // Use parent message timestamp as identifier
