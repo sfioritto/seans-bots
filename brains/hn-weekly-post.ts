@@ -1,5 +1,6 @@
 import { brain } from '../brain.js';
 import { aiRelatedPostsPrompt } from '../prompts/hn-weekly-post/ai-related-posts.js';
+import { generateWeeklyPostPrompt } from '../prompts/hn-weekly-post/generate-weekly-post.js';
 import { slackWebhook } from '../webhooks/slack.js';
 
 const hnWeeklyPostBrain = brain('hn-weekly-post')
@@ -57,7 +58,47 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       filteredArticles,
     };
   })
-  .step('Send to Slack and wait for feedback', async ({ state }) => {
+  .step('Fetch article content', async ({ state }) => {
+    console.log(`Fetching content for ${state.filteredArticles.length} articles...`);
+
+    // Fetch content for each article
+    const articlesWithContent = await Promise.all(
+      state.filteredArticles.map(async (article: any) => {
+        try {
+          const response = await fetch(article.url);
+          const html = await response.text();
+
+          // Basic content extraction - remove HTML tags and get first 1500 chars
+          const text = html
+            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+            .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          return {
+            ...article,
+            content: text.slice(0, 1500),
+          };
+        } catch (error) {
+          console.error(`Failed to fetch content for ${article.title}:`, error);
+          return {
+            ...article,
+            content: undefined,
+          };
+        }
+      })
+    );
+
+    console.log(`Successfully fetched content for ${articlesWithContent.filter((a: any) => a.content).length} articles`);
+
+    return {
+      ...state,
+      filteredArticles: articlesWithContent,
+    };
+  })
+  .prompt('Generate draft post', generateWeeklyPostPrompt)
+  .step('Post draft for feedback', async ({ state }) => {
     const slackBotToken = process.env.SLACK_BOT_TOKEN;
     const slackChannelId = process.env.SLACK_CHANNEL_ID || 'UDFFLKPM5'; // DM to Sean
 
@@ -65,23 +106,39 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       throw new Error('SLACK_BOT_TOKEN is not set');
     }
 
-    // Slack limits checkboxes to 10 options max, so take top 10
-    const articlesForReview = state.filteredArticles.slice(0, 10);
+    // Split the post into chunks to avoid Slack's 3000 character block limit
+    const postContent = state.weeklyPost.post;
+    const maxChunkSize = 2900; // Leave buffer for safety
+    const chunks: string[] = [];
 
-    // Build the Slack message with checkboxes
+    let currentChunk = '';
+    const lines = postContent.split('\n');
+
+    for (const line of lines) {
+      if (currentChunk.length + line.length + 1 > maxChunkSize) {
+        // Current chunk is full, save it and start new one
+        if (currentChunk) chunks.push(currentChunk);
+        currentChunk = line;
+      } else {
+        currentChunk += (currentChunk ? '\n' : '') + line;
+      }
+    }
+    if (currentChunk) chunks.push(currentChunk);
+
+    // Post the draft with instructions and a "Done" button
     const blocks: any[] = [
       {
         type: 'header',
         text: {
           type: 'plain_text',
-          text: '🤖 AI Articles from Hacker News',
+          text: '📝 Weekly AI News Draft',
         },
       },
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `Found *${state.filteredArticles.length}* AI-related articles from the last week. Showing top ${articlesForReview.length}.\n\nUncheck any you don't want, then click Submit:`,
+          text: `Here's the first draft based on ${state.filteredArticles.length} AI-related articles from Hacker News this week:\n\n*Reply to this thread* with any changes you'd like, then click Done below.`,
         },
       },
       {
@@ -89,34 +146,18 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       },
     ];
 
-    // Create checkbox options (max 10 due to Slack limitation)
-    const checkboxOptions = articlesForReview.map((article: any) => ({
-      text: {
-        type: 'plain_text',
-        text: `${article.title} (${article.score} points)`,
-      },
-      description: {
-        type: 'plain_text',
-        text: article.url,
-      },
-      value: `${article.id}`,
-    }));
-
-    // Add checkboxes (all checked by default via initial_options)
-    blocks.push({
-      type: 'actions',
-      block_id: 'article_selection',
-      elements: [
-        {
-          type: 'checkboxes',
-          action_id: 'selected_articles',
-          initial_options: checkboxOptions, // Pre-check all
-          options: checkboxOptions,
+    // Add chunks as separate section blocks
+    for (const chunk of chunks) {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: chunk,
         },
-      ],
-    });
+      });
+    }
 
-    // Add submit button
+    // Add final divider and button
     blocks.push(
       {
         type: 'divider',
@@ -128,11 +169,11 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
             type: 'button',
             text: {
               type: 'plain_text',
-              text: '✅ Submit Selection',
+              text: '✅ Done - regenerate with feedback',
             },
             style: 'primary',
-            action_id: 'submit_selection',
-            value: 'submit',
+            action_id: 'submit_feedback',
+            value: 'done',
           },
         ],
       }
@@ -148,7 +189,7 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       body: JSON.stringify({
         channel: slackChannelId,
         blocks,
-        text: `Found ${state.filteredArticles.length} AI articles from HN`,
+        text: 'Weekly AI News Draft',
       }),
     });
 
@@ -156,53 +197,125 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
 
     if (!result.ok) {
       console.error('Slack API error:', result);
-      console.error('Blocks sent:', JSON.stringify(blocks, null, 2));
       throw new Error(`Slack API error: ${result.error}`);
     }
 
     const messageTs = result.ts;
-    console.log(`Sent message to Slack: ${messageTs}`);
+    const actualChannelId = result.channel; // Use the actual channel ID from Slack's response
+    console.log(`Sent draft message to Slack: ${messageTs} in channel ${actualChannelId}`);
 
-    // Return state and waitFor to pause the brain
-    // Wait for the submit button click
+    // Wait for the "Done" button click
+    // Meanwhile, the webhook will collect thread replies with this messageTs as thread_ts
     return {
       state: {
         ...state,
-        slackMessageTs: messageTs,
-        slackChannelId,
-        articlesForReview, // Store the articles we showed for review
+        draftMessageTs: messageTs,
+        slackChannelId: actualChannelId, // Store the actual channel ID, not the user ID
       },
-      waitFor: [slackWebhook(`${messageTs}-submit_selection`)],
+      waitFor: [slackWebhook(`${messageTs}-submit_feedback`)],
     };
   })
-  .step('Process selected articles', ({ state, response }) => {
-    // Extract selected article IDs from the Slack payload
-    const payload = response as any;
-    const checkboxState = payload.state?.values?.article_selection?.selected_articles;
-    const selectedArticleIds = checkboxState?.selected_options?.map(
-      (option: any) => option.value
-    ) || [];
-
-    console.log(`User selected ${selectedArticleIds.length} articles`);
-
-    // Filter to only the articles the user selected from the review list
-    const articlesForReview = state.articlesForReview as Array<{
-      id: any;
-      title: any;
-      url: any;
-      score: any;
-      time: any;
-    }>;
-
-    const selectedArticles = articlesForReview.filter((article) =>
-      selectedArticleIds.includes(String(article.id))
+  .step('Collect feedback from thread', async ({ state }) => {
+    // Fetch all thread replies to collect feedback
+    const slackBotToken = process.env.SLACK_BOT_TOKEN;
+    const response = await fetch(
+      `https://slack.com/api/conversations.replies?channel=${state.slackChannelId}&ts=${state.draftMessageTs}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${slackBotToken}`,
+        },
+      }
     );
 
-    console.log(`User kept ${selectedArticles.length} out of ${articlesForReview.length} articles`);
+    const result = await response.json();
+
+    if (!result.ok) {
+      console.error('Failed to fetch thread replies:', result);
+      throw new Error(`Slack API error: ${result.error}`);
+    }
+
+    // Filter out the original message and bot messages, keep only user feedback
+    const feedbackMessages = result.messages
+      .filter((msg: any) => msg.ts !== state.draftMessageTs && !msg.bot_id)
+      .map((msg: any) => ({
+        text: msg.text,
+        ts: msg.ts,
+      }));
+
+    console.log(`Collected ${feedbackMessages.length} feedback messages`);
 
     return {
       ...state,
-      selectedArticles,
+      feedbackMessages,
+    };
+  })
+  .step('Check if regeneration needed', ({ state }) => {
+    // If there's no feedback, skip regeneration
+    if (!state.feedbackMessages || state.feedbackMessages.length === 0) {
+      console.log('No feedback received, using original draft');
+      return state;
+    }
+
+    console.log(`Will regenerate post with ${state.feedbackMessages.length} feedback messages`);
+    return state;
+  })
+  .prompt('Regenerate with feedback', {
+    template: (state: any) => {
+      // If no feedback, just return the original post
+      if (!state.feedbackMessages || state.feedbackMessages.length === 0) {
+        return generateWeeklyPostPrompt.template({ filteredArticles: state.filteredArticles });
+      }
+
+      // Otherwise regenerate with feedback
+      return generateWeeklyPostPrompt.template({
+        filteredArticles: state.filteredArticles,
+        previousDraft: state.weeklyPost.post,
+        feedbackMessages: state.feedbackMessages,
+      });
+    },
+    outputSchema: {
+      schema: generateWeeklyPostPrompt.outputSchema.schema,
+      name: 'regeneratedPost' as const,
+    },
+  })
+  .step('Set final post', ({ state }) => ({
+    ...state,
+    finalPost: state.regeneratedPost.post,
+  }))
+  .step('Post final version to public channel', async ({ state }) => {
+    const slackBotToken = process.env.SLACK_BOT_TOKEN;
+    // TODO: Replace with your actual public channel ID
+    const publicChannelId = 'C051SLV9Z9V'; // Replace with actual channel ID
+
+    const postToSend = state.finalPost;
+
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${slackBotToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: publicChannelId,
+        text: postToSend,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!result.ok) {
+      console.error('Failed to post to public channel:', result);
+      throw new Error(`Slack API error: ${result.error}`);
+    }
+
+    console.log(`Successfully posted to public channel: ${publicChannelId}`);
+
+    return {
+      ...state,
+      publishedTs: result.ts,
+      publishedChannel: publicChannelId,
     };
   });
 

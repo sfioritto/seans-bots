@@ -9,7 +9,6 @@ export const slackWebhook = createWebhook(
   slackWebhookSchema,
   async (request) => {
     try {
-      // Slack sends interactive payloads as form-encoded data
       const contentType = request.headers.get('content-type') || '';
       let payload: any;
 
@@ -23,15 +22,48 @@ export const slackWebhook = createWebhook(
         }
         payload = JSON.parse(payloadStr);
       } else {
-        // Fallback to JSON parsing
+        // Fallback to JSON parsing (used by Events API)
         const body = await request.json() as any;
         payload = body.payload ? JSON.parse(body.payload) : body;
       }
 
-      console.log('Slack webhook received:', {
-        type: payload.type,
-        action_id: payload.actions?.[0]?.action_id,
-      });
+      // Handle URL verification challenge (required for Events API setup)
+      if (payload.type === 'url_verification') {
+        return {
+          type: 'verification' as const,
+          challenge: payload.challenge
+        };
+      }
+
+      // Handle Events API callbacks (message events, etc.)
+      if (payload.type === 'event_callback' && payload.event) {
+        const event = payload.event;
+
+        // Handle message events in threads
+        if (event.type === 'message' && event.thread_ts && !event.subtype) {
+          // This is a reply to a thread
+          return {
+            type: 'webhook' as const,
+            identifier: event.thread_ts, // Use parent message timestamp as identifier
+            response: {
+              type: 'thread_reply',
+              message: {
+                text: event.text,
+                ts: event.ts,
+                user: event.user,
+                thread_ts: event.thread_ts,
+              },
+            },
+          };
+        }
+
+        // Ignore other message events (like bot messages, edits, etc.)
+        return {
+          type: 'webhook' as const,
+          identifier: 'ignored',
+          response: { ignored: true },
+        };
+      }
 
       // Handle block actions (buttons, checkboxes, etc.)
       if (payload.type === 'block_actions') {
@@ -40,9 +72,8 @@ export const slackWebhook = createWebhook(
         const actionId = payload.actions?.[0]?.action_id;
         const identifier = `${messageTs}-${actionId}`;
 
-        console.log(`Webhook identifier: ${identifier}`);
-
         return {
+          type: 'webhook' as const,
           identifier,
           response: payload,
         };
