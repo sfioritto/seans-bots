@@ -45,25 +45,21 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
   })
   .prompt('Find AI-related posts', aiRelatedPostsPrompt)
   .step('Filter AI-related articles', ({ state }) => {
-    const filteredArticles = state.aiRelatedPosts.articleIds
+    const filteredStories = state.aiRelatedPosts.articleIds
       .map((id: number) => {
         return state.recentStories.find((story: any) => Number(story.id) === Number(id));
       })
-      .filter((story): story is { id: any; title: any; url: any; score: any; time: any } => story !== undefined);
-
-    console.log(`Found ${filteredArticles.length} AI-related articles`);
+      .filter((story) => story !== undefined);
 
     return {
       ...state,
-      filteredArticles,
+      filteredStories,
     };
   })
   .step('Fetch article content', async ({ state }) => {
-    console.log(`Fetching content for ${state.filteredArticles.length} articles...`);
-
     // Fetch content for each article
     const articlesWithContent = await Promise.all(
-      state.filteredArticles.map(async (article: any) => {
+      state.filteredStories.map(async (article: any) => {
         try {
           const response = await fetch(article.url);
           const html = await response.text();
@@ -90,11 +86,9 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       })
     );
 
-    console.log(`Successfully fetched content for ${articlesWithContent.filter((a: any) => a.content).length} articles`);
-
     return {
       ...state,
-      filteredArticles: articlesWithContent,
+      filteredStories: articlesWithContent,
     };
   })
   .prompt('Generate draft post', generateWeeklyPostPrompt)
@@ -154,7 +148,7 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*Draft based on ${state.filteredArticles.length} AI-related articles from Hacker News this week:*`,
+          text: `*Draft based on ${state.filteredStories.length} AI-related articles from Hacker News this week:*`,
         },
       },
       {
@@ -195,8 +189,6 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       throw new Error(`Slack API error: ${draftResult.error}`);
     }
 
-    console.log(`Posted draft in thread: ${threadTs} in channel ${actualChannelId}`);
-
     // Wait for the first thread reply (webhook will be triggered)
     return {
       state: {
@@ -212,8 +204,6 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
     const webhookResponse = response as any;
     const feedbackText = webhookResponse.message.text;
 
-    console.log(`Received feedback: "${feedbackText}"`);
-
     // Package it in the format expected by the regeneration prompt
     const feedbackMessages = [{
       text: feedbackText,
@@ -225,14 +215,10 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       feedbackMessages,
     };
   })
-  .step('Prepare for regeneration', ({ state }) => {
-    console.log(`Regenerating post with feedback`);
-    return state;
-  })
   .prompt('Regenerate with feedback', {
     template: (state: any) => {
       return generateWeeklyPostPrompt.template({
-        filteredArticles: state.filteredArticles,
+        filteredStories: state.filteredStories,
         previousDraft: state.weeklyPost.post,
         feedbackMessages: state.feedbackMessages,
       });
