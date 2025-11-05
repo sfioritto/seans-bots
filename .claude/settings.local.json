@@ -5,7 +5,9 @@
       "WebFetch(domain:docs.slack.dev)",
       "Bash(npm run typecheck:*)",
       "Bash(cat:*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:developers.google.com)",
+      "Bash(npm test:*)"
     ],
     "deny": [],
     "ask": []
