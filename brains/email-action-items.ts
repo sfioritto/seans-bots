@@ -5,15 +5,28 @@ const actionItemSchema = z.object({
   actionItems: z.array(
     z.object({
       email: z.string().describe('The subject of the email'),
-      items: z.array(z.string()).describe('List of action items from this email'),
+      items: z.array(
+        z.object({
+          description: z.string().describe('The action item description'),
+          exactQuote: z.string().describe('The EXACT text from the email that explicitly requests this action'),
+          context: z.string().describe('Additional context from the email that is relevant to this action item, or empty string if none'),
+          link: z.string().describe('URL to complete the action if available in the email, or empty string if none'),
+          steps: z.array(z.string()).describe('Step-by-step directions if no link is available, or empty array if not needed'),
+        })
+      ).describe('List of action items from this email'),
     })
   ),
 });
 
 const emailActionItemsBrain = brain('email-action-items')
   .step('Fetch emails from all accounts', async ({ state, gmail }) => {
-    // Search for emails containing keywords related to your topics
-    const query = '(district 97 OR isaac OR "oak park" OR "rock climbing") is:unread';
+    // Calculate date for one week ago
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const dateStr = oneWeekAgo.toISOString().split('T')[0].replace(/-/g, '/');
+
+    // Search for emails in primary inbox from the last week
+    const query = `after:${dateStr} is:unread category:personal`;
 
     const accounts = gmail.getAccounts();
 
@@ -51,13 +64,20 @@ const emailActionItemsBrain = brain('email-action-items')
     const accounts = gmail.getAccounts();
     const accountTokenMap = new Map(accounts.map((a) => [a.name, a.refreshToken]));
 
-    const messageDetails = [];
+    const messageDetails: { account: string; subject: string; from: string; date: string; body: string }[] = [];
+
+    console.log('\n=== EMAILS FOUND ===\n');
+    console.log(`Found ${state.allMessages.length} emails matching search criteria:\n`);
 
     for (const message of state.allMessages) {
       const refreshToken = accountTokenMap.get(message.account);
       if (!refreshToken) continue;
 
       const details = await gmail.getMessageDetails(refreshToken, message.id);
+
+      // Print each email subject as we fetch it
+      console.log(`📧 ${details.subject}`);
+
       messageDetails.push({
         ...details,
         account: message.account,
@@ -66,6 +86,8 @@ const emailActionItemsBrain = brain('email-action-items')
       // Small delay to avoid rate limiting
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
+
+    console.log('\n===================\n');
 
     return {
       ...state,
@@ -89,24 +111,47 @@ ${email.body.substring(0, 1500)}
         )
         .join('\n');
 
-      return `You are an AI assistant helping to identify action items from emails.
+      return `You are an AI assistant helping to identify action items from emails for a parent whose child (Isaac) attends Gwendolyn Brooks Middle School.
 
-I have ${messageDetails.length} emails related to District 97 (school), Isaac, Oak Park schools, and rock climbing.
+CRITICAL DEFINITION - WHAT IS AN ACTION ITEM:
+An action item is something where if I DON'T do it:
+1. Isaac will MISS AN OPPORTUNITY (can't attend a field trip, miss a registration deadline, etc.)
+2. Someone is WAITING for my response (teacher needs payment, permission slip, RSVP, etc.)
+3. Isaac will face a NEGATIVE CONSEQUENCE (late fee, can't participate, etc.)
 
-Please read through each email and extract specific action items that require my attention or action.
+REAL-WORLD EXAMPLES OF ACTION ITEMS:
+✅ "Pay for field trip by [date]" - Isaac misses the trip if I don't pay
+✅ "Return permission slip" - Teacher is waiting, Isaac can't participate
+✅ "Bring lunch on [date]" - Isaac will be hungry if I don't prepare it
+✅ "Register by [deadline]" - Isaac misses out on the opportunity
+✅ "RSVP by [date]" - Someone is waiting for my response
 
-For each email, list the concrete tasks or actions I need to take. Focus on:
-- Tasks I need to complete
-- Events I need to attend
-- Items I need to respond to
-- Deadlines I need to meet
-- Things I need to prepare or bring
+NOT ACTION ITEMS:
+❌ Board meeting highlights - purely informational
+❌ "Students are forming a club" - announcement, not a request
+❌ Newsletter updates - no action required
+❌ Celebration announcements - just sharing news
 
-Here are the emails:
+FILTERING:
+- Focus on emails about Isaac, Brooks Middle School, and rock climbing
+- Ignore Whittier Elementary (he no longer attends)
+- Ignore activities Isaac isn't in (cross country, chorus, robotics, etc.)
+
+INSTRUCTIONS:
+For each email, ask yourself: "Is there something I need to DO here, or will something bad happen / someone is waiting / Isaac misses out?"
+
+If YES, extract:
+1. Description: What specific action do I need to take?
+2. Exact quote: The text from the email that indicates this action is needed (can be a sentence or phrase)
+3. Context: Why is this needed? What's the deadline? What happens if I don't do it?
+4. Link: Any URL to complete the action (or empty string)
+5. Steps: How to do it if no link (or empty array)
+
+Here are ${messageDetails.length} emails to analyze:
 
 ${emailSummaries}
 
-Please extract the action items and organize them by email.`;
+Return ONLY emails with real action items where I need to DO something with consequences if I don't.`;
     },
     outputSchema: {
       schema: actionItemSchema,
@@ -114,15 +159,65 @@ Please extract the action items and organize them by email.`;
     },
   })
   .step('Format final output', ({ state }) => {
-    const totalActionItems = state.actionItems.actionItems.reduce(
+    // Filter out emails with no action items
+    const emailsWithActionItems = state.actionItems.actionItems.filter(
+      (email: any) => email.items.length > 0
+    );
+
+    const totalActionItems = emailsWithActionItems.reduce(
       (sum: number, email: any) => sum + email.items.length,
       0
     );
 
+    // Print action items to console/logs
+    console.log('\n=== EMAIL ACTION ITEMS ===\n');
+    console.log(`Found ${emailsWithActionItems.length} emails with ${totalActionItems} total action items\n`);
+
+    emailsWithActionItems.forEach((emailGroup: any, index: number) => {
+      console.log(`\n📧 ${index + 1}. ${emailGroup.email}`);
+
+      // Find the matching email details
+      const emailDetails = state.messageDetails.find(
+        (detail: any) => detail.subject === emailGroup.email
+      );
+
+      emailGroup.items.forEach((item: any, itemIndex: number) => {
+        console.log(`   ${itemIndex + 1}. ${item.description}`);
+        if (item.exactQuote && item.exactQuote.trim()) {
+          console.log(`      📋 Quote: "${item.exactQuote}"`);
+        }
+        if (item.context && item.context.trim()) {
+          console.log(`      ℹ️  ${item.context}`);
+        }
+        if (item.link && item.link.trim()) {
+          console.log(`      🔗 ${item.link}`);
+        }
+        if (item.steps && item.steps.length > 0) {
+          console.log(`      📝 Steps:`);
+          item.steps.forEach((step: string, stepIndex: number) => {
+            console.log(`         ${stepIndex + 1}. ${step}`);
+          });
+        }
+      });
+
+      // Print email body
+      if (emailDetails) {
+        console.log(`\n   📄 Email Body:`);
+        console.log(`   ${'-'.repeat(80)}`);
+        console.log(`   ${emailDetails.body.substring(0, 2000).split('\n').join('\n   ')}`);
+        if (emailDetails.body.length > 2000) {
+          console.log(`   ... (truncated)`);
+        }
+        console.log(`   ${'-'.repeat(80)}`);
+      }
+    });
+
+    console.log('\n=========================\n');
+
     return {
       ...state,
       summary: {
-        totalEmails: state.messageDetails.length,
+        totalEmails: emailsWithActionItems.length,
         totalActionItems,
       },
     };

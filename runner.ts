@@ -4,6 +4,6 @@ import { openai } from '@ai-sdk/openai';
 
 export const runner = new BrainRunner({
   adapters: [],
-  client: new VercelClient(openai('gpt-4o-mini')),
+  client: new VercelClient(openai('gpt-5')),
   resources: {},
 });
