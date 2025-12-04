@@ -14,7 +14,7 @@
  */
 
 import { google } from 'googleapis';
-import * as readline from 'readline';
+import * as http from 'http';
 
 // Load environment variables
 import dotenv from 'dotenv';
@@ -22,6 +22,8 @@ dotenv.config();
 
 const CLIENT_ID = process.env.GMAIL_CLIENT_ID;
 const CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET;
+const REDIRECT_PORT = 8085;
+const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}`;
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error('❌ Error: GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET must be set in .env');
@@ -34,7 +36,7 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 const oauth2Client = new google.auth.OAuth2(
   CLIENT_ID,
   CLIENT_SECRET,
-  'urn:ietf:wg:oauth:2.0:oob' // Special redirect URI for installed apps
+  REDIRECT_URI
 );
 
 // Generate the authorization URL
@@ -44,38 +46,56 @@ const authUrl = oauth2Client.generateAuthUrl({
   prompt: 'consent' // Force consent screen to ensure we get refresh token
 });
 
-console.log('🔐 Gmail OAuth Setup\n');
-console.log('Follow these steps:\n');
-console.log('1. Visit this URL in your browser:');
-console.log(`\n   ${authUrl}\n`);
-console.log('2. Sign in with the Gmail account you want to access');
-console.log('3. Grant the requested permissions');
-console.log('4. Copy the authorization code that appears\n');
-console.log('Enter the authorization code here: ');
+// Start a local server to receive the OAuth callback
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url || '', REDIRECT_URI);
+  const code = url.searchParams.get('code');
+  const error = url.searchParams.get('error');
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
-rl.on('line', async (code: string) => {
-  try {
-    const { tokens } = await oauth2Client.getToken(code.trim());
-
-    console.log('\n✅ Success! Here is your refresh token:\n');
-    console.log(`   ${tokens.refresh_token}\n`);
-    console.log('Add this to your .env file as:');
-    console.log(`GMAIL_REFRESH_TOKEN_ACCOUNT1=${tokens.refresh_token}`);
-    console.log('\n(Use ACCOUNT2, ACCOUNT3, etc. for additional accounts)\n');
-
-  } catch (error) {
-    console.error('\n❌ Error getting tokens:', error);
+  if (error) {
+    res.writeHead(400, { 'Content-Type': 'text/html' });
+    res.end(`<h1>Authorization failed</h1><p>Error: ${error}</p>`);
+    console.error(`\n❌ Authorization failed: ${error}`);
+    server.close();
+    process.exit(1);
   }
 
-  rl.close();
+  if (code) {
+    try {
+      const { tokens } = await oauth2Client.getToken(code);
+
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<h1>Success!</h1><p>You can close this window and return to the terminal.</p>');
+
+      console.log('\n✅ Success! Here is your refresh token:\n');
+      console.log(`   ${tokens.refresh_token}\n`);
+      console.log('Add this to your .env file as:');
+      console.log(`GMAIL_REFRESH_TOKEN_ACCOUNT1=${tokens.refresh_token}`);
+      console.log('\n(Use ACCOUNT2, ACCOUNT3, etc. for additional accounts)\n');
+      console.log('👋 Setup complete. Run this script again for each additional Gmail account.');
+
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'text/html' });
+      res.end('<h1>Error</h1><p>Failed to exchange code for tokens.</p>');
+      console.error('\n❌ Error getting tokens:', err);
+    }
+
+    server.close();
+    process.exit(0);
+  }
 });
 
-rl.on('close', () => {
-  console.log('\n👋 Setup complete. Run this script again for each additional Gmail account.');
-  process.exit(0);
+server.listen(REDIRECT_PORT, () => {
+  console.log('🔐 Gmail OAuth Setup\n');
+  console.log('A browser window will open for authorization.');
+  console.log('If it doesn\'t open automatically, visit this URL:\n');
+  console.log(`   ${authUrl}\n`);
+  console.log(`Waiting for authorization on http://localhost:${REDIRECT_PORT}...\n`);
+
+  // Try to open the URL in the default browser
+  const openCommand = process.platform === 'darwin' ? 'open' :
+                      process.platform === 'win32' ? 'start' : 'xdg-open';
+  import('child_process').then(({ exec }) => {
+    exec(`${openCommand} "${authUrl}"`);
+  });
 });
