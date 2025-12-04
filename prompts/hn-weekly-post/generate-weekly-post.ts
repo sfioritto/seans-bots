@@ -15,17 +15,17 @@ interface FeedbackMessage {
 
 export const generateWeeklyPostPrompt = {
   template: ({
-    filteredStories,
+    aiRelatedStories,
     previousDraft,
     feedbackMessages
   }: {
-    filteredStories: Article[],
+    aiRelatedStories: Article[],
     previousDraft?: string,
     feedbackMessages?: FeedbackMessage[]
   }) => {
     const isRegeneration = previousDraft && feedbackMessages && feedbackMessages.length > 0;
 
-    const articlesText = filteredStories.map((article, idx) =>
+    const articlesText = aiRelatedStories.map((article, idx: number) =>
       `[${idx + 1}] ID: ${article.id}
 Title: ${article.title}
 URL: ${article.url}

@@ -45,7 +45,7 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
   })
   .prompt('Find AI-related posts', aiRelatedPostsPrompt)
   .step('Filter AI-related articles', ({ state }) => {
-    const filteredStories = state.aiRelatedPosts.articleIds
+    const aiRelatedStories = state.aiRelatedStoryIds.ids
       .map((id: number) => {
         return state.recentStories.find((story: any) => Number(story.id) === Number(id));
       })
@@ -53,13 +53,14 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
 
     return {
       ...state,
-      filteredStories,
+      aiRelatedStories,
     };
   })
   .step('Fetch article content', async ({ state }) => {
+    const { aiRelatedStories } = state;
     // Fetch content for each article
     const articlesWithContent = await Promise.all(
-      state.filteredStories.map(async (article: any) => {
+      aiRelatedStories.map(async (article) => {
         try {
           const response = await fetch(article.url);
           const html = await response.text();
@@ -88,7 +89,7 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
 
     return {
       ...state,
-      filteredStories: articlesWithContent,
+      aiRelatedStories: articlesWithContent,
     };
   })
   .prompt('Generate draft post', generateWeeklyPostPrompt)
@@ -159,17 +160,13 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
 
     // Wait for the first thread reply (webhook will be triggered)
     return {
-      state: {
-        ...state,
-        threadTs,
-        slackChannelId: actualChannelId,
-      },
+      state,
       waitFor: [slackWebhook(threadTs)], // Wait for thread reply
     };
   })
   .step('Extract feedback from webhook', ({ state, response }) => {
     // The webhook gives us the thread reply directly
-    const webhookResponse = response as any;
+    const webhookResponse = response;
     const feedbackText = webhookResponse.message.text;
 
     // Package it in the format expected by the regeneration prompt
@@ -186,27 +183,19 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
   .prompt('Regenerate with feedback', {
     template: (state: any) => {
       return generateWeeklyPostPrompt.template({
-        filteredStories: state.filteredStories,
-        previousDraft: state.weeklyPost.post,
+        aiRelatedStories: state.aiRelatedStories,
+        previousDraft: state.weeklyPost?.post,
         feedbackMessages: state.feedbackMessages,
       });
     },
     outputSchema: {
       schema: generateWeeklyPostPrompt.outputSchema.schema,
-      name: 'regeneratedPost' as const,
+      name: 'finalPost' as const,
     },
   })
-  .step('Set final post', ({ state }) => {
-    // Preserve all state including slackChannelId from earlier steps
-    return {
-      ...state,
-      finalPost: state.regeneratedPost.post,
-    };
-  })
-  .step('Post final version as DM', async ({ state }) => {
+  .step('Post final version to sw-dev', async ({ state }) => {
     const slackBotToken = process.env.SLACK_BOT_TOKEN;
-    // DM the final version to Sean (using the same channel ID from earlier)
-    const dmChannelId = (state as any).slackChannelId || process.env.SLACK_CHANNEL_ID || 'UDFFLKPM5';
+    const swDevchannelId = 'CJ8PR3XGT';
 
     // Post the static header as the main message
     const headerResponse = await fetch('https://slack.com/api/chat.postMessage', {
@@ -216,8 +205,8 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        channel: dmChannelId,
-        text: `✅ Final version:\n\nThis week's AI articles worth reading 🧵`,
+        channel: swDevchannelId,
+        text: `This week's AI articles worth reading 🧵`,
       }),
     });
 
@@ -231,7 +220,7 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
     const threadTs = headerResult.ts;
 
     // Post each article summary as a separate thread reply
-    const articleLines = state.finalPost.split('\n').filter((line: string) => line.trim());
+    const articleLines = state.finalPost.post.split('\n').filter((line: string) => line.trim());
 
     for (const articleLine of articleLines) {
       await fetch('https://slack.com/api/chat.postMessage', {
@@ -241,7 +230,7 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          channel: dmChannelId,
+          channel: swDevchannelId,
           thread_ts: threadTs,
           text: articleLine,
           unfurl_links: false,
@@ -250,12 +239,10 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       });
     }
 
-    console.log(`Successfully posted final version to DM: ${dmChannelId}`);
-
     return {
       ...state,
       publishedTs: threadTs,
-      publishedChannel: dmChannelId,
+      publishedChannel: swDevchannelId,
     };
   });
 

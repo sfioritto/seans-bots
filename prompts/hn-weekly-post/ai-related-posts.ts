@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const aiRelatedPostsPrompt = {
-  template: ({ recentStories }: { recentStories: any[] }) => {
+  template: ({ recentStories }: { recentStories: { id: number, title: string }[] }) => {
     return `
     Analyze these Hacker News articles and identify which ones are related to AI for developers.
 
@@ -13,8 +13,8 @@ export const aiRelatedPostsPrompt = {
   },
   outputSchema: {
     schema: z.object({
-      articleIds: z.array(z.number()).describe('Array of article IDs that are AI-related'),
+      ids: z.array(z.number()).describe('Array of article IDs that are AI-related'),
     }),
-    name: 'aiRelatedPosts' as const,
+    name: 'aiRelatedStoryIds' as const,
   },
 }
