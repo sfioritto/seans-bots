@@ -228,16 +228,47 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
       name: 'regeneratedPost' as const,
     },
   })
-  .step('Set final post', ({ state }) => ({
-    ...state,
-    finalPost: state.regeneratedPost.post,
-  }))
-  .step('Post final version to public channel', async ({ state }) => {
+  .step('Set final post', ({ state }) => {
+    // Preserve all state including slackChannelId from earlier steps
+    return {
+      ...state,
+      finalPost: state.regeneratedPost.post,
+    };
+  })
+  .step('Post final version as DM', async ({ state }) => {
     const slackBotToken = process.env.SLACK_BOT_TOKEN;
-    // TODO: Replace with your actual public channel ID
-    const publicChannelId = 'C051SLV9Z9V'; // Replace with actual channel ID
+    // DM the final version to Sean (using the same channel ID from earlier)
+    const dmChannelId = (state as any).slackChannelId || process.env.SLACK_CHANNEL_ID || 'UDFFLKPM5';
 
-    const postToSend = state.finalPost;
+    const postContent = state.finalPost;
+
+    // Split into chunks if needed (same as draft posting)
+    const maxChunkSize = 2900;
+    const chunks: string[] = [];
+    let currentChunk = '';
+    const lines = postContent.split('\n');
+
+    for (const line of lines) {
+      if (currentChunk.length + line.length + 1 > maxChunkSize) {
+        if (currentChunk) chunks.push(currentChunk);
+        currentChunk = line;
+      } else {
+        currentChunk += (currentChunk ? '\n' : '') + line;
+      }
+    }
+    if (currentChunk) chunks.push(currentChunk);
+
+    // Build blocks with mrkdwn formatting
+    const blocks: any[] = [];
+    for (const chunk of chunks) {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: chunk,
+        },
+      });
+    }
 
     const response = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
@@ -246,8 +277,9 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        channel: publicChannelId,
-        text: postToSend,
+        channel: dmChannelId,
+        blocks: blocks,
+        text: '✅ Final version - This week in AI on Hacker News', // Fallback text for notifications
         unfurl_links: false,
         unfurl_media: false,
       }),
@@ -256,16 +288,16 @@ const hnWeeklyPostBrain = brain('hn-weekly-post')
     const result = await response.json();
 
     if (!result.ok) {
-      console.error('Failed to post to public channel:', result);
+      console.error('Failed to post final version:', result);
       throw new Error(`Slack API error: ${result.error}`);
     }
 
-    console.log(`Successfully posted to public channel: ${publicChannelId}`);
+    console.log(`Successfully posted final version to DM: ${dmChannelId}`);
 
     return {
       ...state,
       publishedTs: result.ts,
-      publishedChannel: publicChannelId,
+      publishedChannel: dmChannelId,
     };
   });
 

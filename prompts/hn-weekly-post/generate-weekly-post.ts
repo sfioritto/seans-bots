@@ -70,8 +70,8 @@ Your task is to create a compelling weekly post with two parts:
 2. **Article Summaries**: For EACH article, create:
    - One sharp, to-the-point sentence (15-25 words) that captures what developers actually care about
    - Focus on the "why this matters" not just "what it is"
-   - Include: article title as markdown link, your summary, HN score, and HN comments link
-   - Format: **[Article Title](article-url)** - Your one-sentence summary. _([score] points | [HN comments](hn-comments-url))_
+   - Include: article title as Slack link, your summary, HN score, and HN comments link
+   - Format: *<article-url|Article Title>* - Your one-sentence summary. _(<score> points | <hn-comments-url|HN comments>)_
 
 TONE & STYLE:
 - Professional but conversational
@@ -80,11 +80,31 @@ TONE & STYLE:
 - No superlatives unless truly warranted
 - Focus on practical implications
 
-Generate the complete formatted post as markdown, ready to publish.`;
+CRITICAL FORMATTING REQUIREMENTS - YOU MUST FOLLOW THESE EXACTLY:
+This post will be sent directly to Slack. You MUST use Slack's mrkdwn syntax, NOT standard markdown.
+
+LINKS - SLACK FORMAT ONLY:
+- WRONG: [link text](url)
+- CORRECT: <url|link text>
+- Example: <https://example.com|Click here>
+
+EMPHASIS:
+- Bold: *text* (single asterisks, NOT double)
+- Italic: _text_ (underscores)
+
+REQUIRED FORMAT FOR EACH ARTICLE:
+*<article-url|Article Title>* - Your one-sentence summary. _(score points | <hn-comments-url|HN comments>)_
+
+EXAMPLE OF CORRECT FORMATTING:
+*<https://example.com/article|Building Better AI Agents>* - Shows how to implement constraint systems for production agents. _(1013 points | <https://news.ycombinator.com/item?id=12345|HN comments>)_
+
+DO NOT use standard markdown syntax like [text](url) or **bold** - these will NOT work in Slack.
+
+Generate the complete formatted post using ONLY Slack mrkdwn syntax.`;
   },
   outputSchema: {
     schema: z.object({
-      post: z.string().describe('The complete formatted weekly post as markdown, including trends paragraph and all article summaries'),
+      post: z.string().describe('The complete formatted weekly post using Slack mrkdwn syntax (NOT standard markdown), including trends paragraph and all article summaries with <url|text> format links'),
     }),
     name: 'weeklyPost' as const,
   },
