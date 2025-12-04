@@ -37,7 +37,7 @@ ${article.content ? `Content Summary: ${article.content.slice(0, 1000)}...` : '(
     if (isRegeneration) {
       const feedbackText = feedbackMessages!.map(msg => `- ${msg.text}`).join('\n');
 
-      return `You are regenerating a weekly AI news post based on user feedback.
+      return `You are regenerating article summaries for a weekly AI news post based on user feedback.
 
 PREVIOUS DRAFT:
 ${previousDraft}
@@ -48,30 +48,34 @@ ${feedbackText}
 ORIGINAL ARTICLES DATA:
 ${articlesText}
 
-Your task: Carefully read the feedback and regenerate the post incorporating the requested changes. Maintain the same structure (trends paragraph + article summaries) unless the feedback specifically requests otherwise.
+Your task: Carefully read the feedback and regenerate the article summaries incorporating the requested changes.
 
-Generate an improved post that addresses all feedback while keeping it sharp, focused, and developer-oriented.`;
+FOR EACH ARTICLE:
+- Write ONE sharp, to-the-point sentence (15-25 words) that captures what developers actually care about
+- Focus on the "why this matters" not just "what it is"
+- Include: article title as Slack link, your summary, HN score, and HN comments link
+- Format: *<article-url|Article Title>* - Your one-sentence summary. _(<score> points | <hn-comments-url|HN comments>)_
+
+FORMATTING REQUIREMENTS (Slack mrkdwn syntax):
+- Links: <url|link text> (NOT [text](url))
+- Bold: *text* (single asterisks)
+- Italic: _text_ (underscores)
+
+Output ONLY the article summaries, one per line. Do NOT include any introductory paragraph or trends summary.`;
     }
 
-    return `You are creating a weekly post about AI-related articles from Hacker News for a developer audience.
+    return `You are creating article summaries for a weekly AI news post on Slack for a developer audience.
 
 ARTICLES FROM THIS WEEK:
 ${articlesText}
 
-Your task is to create a compelling weekly post with two parts:
+Your task: Create a one-sentence summary for EACH article. These will be posted as individual thread replies.
 
-1. **Opening Trends Paragraph**: Write ONE tight, focused paragraph (3-5 sentences max) that:
-   - Identifies meaningful trends across the articles (if any clear patterns emerge)
-   - Highlights the most important/impactful developments
-   - Is written for busy developers who want signal, not noise
-   - Avoids generic fluff - be specific and insightful
-   - If no clear trends, focus on the most significant individual stories
-
-2. **Article Summaries**: For EACH article, create:
-   - One sharp, to-the-point sentence (15-25 words) that captures what developers actually care about
-   - Focus on the "why this matters" not just "what it is"
-   - Include: article title as Slack link, your summary, HN score, and HN comments link
-   - Format: *<article-url|Article Title>* - Your one-sentence summary. _(<score> points | <hn-comments-url|HN comments>)_
+FOR EACH ARTICLE:
+- Write ONE sharp, to-the-point sentence (15-25 words) that captures what developers actually care about
+- Focus on the "why this matters" not just "what it is"
+- Include: article title as Slack link, your summary, HN score, and HN comments link
+- Format: *<article-url|Article Title>* - Your one-sentence summary. _(<score> points | <hn-comments-url|HN comments>)_
 
 TONE & STYLE:
 - Professional but conversational
@@ -100,11 +104,11 @@ EXAMPLE OF CORRECT FORMATTING:
 
 DO NOT use standard markdown syntax like [text](url) or **bold** - these will NOT work in Slack.
 
-Generate the complete formatted post using ONLY Slack mrkdwn syntax.`;
+IMPORTANT: Output ONLY the article summaries, one per line. Do NOT include any introductory paragraph or trends summary. Each line should be one complete article entry in the format shown above.`;
   },
   outputSchema: {
     schema: z.object({
-      post: z.string().describe('The complete formatted weekly post using Slack mrkdwn syntax (NOT standard markdown), including trends paragraph and all article summaries with <url|text> format links'),
+      post: z.string().describe('The article summaries using Slack mrkdwn syntax (NOT standard markdown), one per line with <url|text> format links. NO intro paragraph.'),
     }),
     name: 'weeklyPost' as const,
   },
