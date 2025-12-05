@@ -1,6 +1,17 @@
 import { brain } from '../brain.js';
 import { z } from 'zod';
 
+const notificationSchema = z.object({
+  notifications: z.array(
+    z.object({
+      emailSubject: z.string().describe('The subject of the email'),
+      message: z
+        .string()
+        .describe('Concise one-sentence notification from parent perspective'),
+    })
+  ),
+});
+
 const actionItemSchema = z.object({
   actionItems: z.array(
     z.object({
@@ -64,7 +75,7 @@ const emailActionItemsBrain = brain('email-action-items')
     const accounts = gmail.getAccounts();
     const accountTokenMap = new Map(accounts.map((a) => [a.name, a.refreshToken]));
 
-    const messageDetails: { account: string; subject: string; from: string; date: string; body: string }[] = [];
+    const messageDetails: { account: string; id: string; subject: string; from: string; date: string; body: string }[] = [];
 
     console.log('\n=== EMAILS FOUND ===\n');
     console.log(`Found ${state.allMessages.length} emails matching search criteria:\n`);
@@ -135,7 +146,8 @@ NOT ACTION ITEMS:
 FILTERING:
 - Focus on emails about Isaac, Brooks Middle School, and rock climbing
 - Ignore Whittier Elementary (he no longer attends)
-- Ignore activities Isaac isn't in (cross country, chorus, robotics, etc.)
+- Ignore activities Isaac isn't in (cross country, robotics, Fledglings, etc.)
+- Isaac IS in choir, so include choir-related emails
 
 INSTRUCTIONS:
 For each email, ask yourself: "Is there something I need to DO here, or will something bad happen / someone is waiting / Isaac misses out?"
@@ -216,10 +228,102 @@ Return ONLY emails with real action items where I need to DO something with cons
 
     return {
       ...state,
+      emailsWithActionItems,
       summary: {
         totalEmails: emailsWithActionItems.length,
         totalActionItems,
       },
+    };
+  })
+  .prompt('Generate notification messages', {
+    template: ({ emailsWithActionItems }) => {
+      if (emailsWithActionItems.length === 0) {
+        return 'No emails with action items. Return empty notifications array.';
+      }
+
+      const emailSummaries = emailsWithActionItems
+        .map(
+          (email: any) => `
+Email Subject: ${email.email}
+Action Items:
+${email.items.map((item: any) => `- ${item.description}`).join('\n')}
+`
+        )
+        .join('\n---\n');
+
+      return `Generate concise push notification messages for each email with action items.
+
+INSTRUCTIONS:
+- Write ONE sentence per email summarizing what action is needed
+- Write from the parent's perspective (e.g., "Isaac's nurse needs..." not "You need to...")
+- Be concise - these are phone notifications
+- Include deadlines/dates if relevant
+- Focus on the consequence if action isn't taken
+
+EXAMPLES:
+- "Isaac's nurse needs inhaler paperwork filled out"
+- "Sign permission slip for Isaac's field trip by Friday"
+- "Pack lunch for Isaac's 8/13 field trip"
+
+EMAILS TO PROCESS:
+${emailSummaries}
+
+Return a notification message for each email.`;
+    },
+    outputSchema: {
+      schema: notificationSchema,
+      name: 'notificationData' as const,
+    },
+  })
+  .step('Send NTFY notifications', async ({ state, ntfy }) => {
+    if (state.emailsWithActionItems.length === 0) {
+      console.log('No action items to notify about');
+      return state;
+    }
+
+    console.log('\n=== SENDING NOTIFICATIONS ===\n');
+
+    // Map account names to friendly labels
+    const accountLabels: Record<string, string> = {
+      account1: 'planningforaliens',
+      account2: 'sofware',
+      account3: 'gmail',
+    };
+
+    for (const notification of state.notificationData.notifications) {
+      // Find the matching email to get the message ID and account
+      const emailDetails = state.messageDetails.find(
+        (detail: any) => detail.subject === notification.emailSubject
+      );
+
+      const gmailUrl = emailDetails?.id
+        ? `https://mail.google.com/mail/u/0/#inbox/${emailDetails.id}`
+        : undefined;
+
+      // Add account label to message
+      const accountLabel = emailDetails?.account
+        ? accountLabels[emailDetails.account] || emailDetails.account
+        : '';
+      const messageWithAccount = accountLabel
+        ? `[${accountLabel}] ${notification.message}`
+        : notification.message;
+
+      console.log(`📱 ${messageWithAccount}`);
+      if (gmailUrl) {
+        console.log(`   🔗 ${gmailUrl}`);
+      }
+
+      await ntfy.send(messageWithAccount, gmailUrl);
+
+      // Small delay between notifications
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+
+    console.log('\n=============================\n');
+
+    return {
+      ...state,
+      notificationsSent: state.notificationData.notifications.length,
     };
   });
 
