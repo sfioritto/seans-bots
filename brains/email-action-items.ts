@@ -275,6 +275,51 @@ Return a notification message for each email.`;
       name: 'notificationData' as const,
     },
   })
+  .step('Upload emails to paste.rs', async ({ state }) => {
+    if (state.emailsWithActionItems.length === 0) {
+      return { ...state, emailPasteUrls: {} };
+    }
+
+    console.log('\n=== UPLOADING EMAILS TO PASTE.RS ===\n');
+
+    const emailPasteUrls: Record<string, string> = {};
+
+    for (const emailGroup of state.emailsWithActionItems) {
+      // Find the full email details
+      const emailDetails = state.messageDetails.find(
+        (detail: any) => detail.subject === emailGroup.email
+      );
+
+      if (!emailDetails) continue;
+
+      // Format email content for paste
+      const emailContent = `Subject: ${emailDetails.subject}
+From: ${emailDetails.from}
+Date: ${emailDetails.date}
+
+${emailDetails.body}`;
+
+      // Upload to paste.rs
+      const response = await fetch('https://paste.rs', {
+        method: 'POST',
+        body: emailContent,
+      });
+
+      if (response.ok) {
+        const pasteUrl = await response.text();
+        emailPasteUrls[emailDetails.subject] = pasteUrl.trim();
+        console.log(`📋 ${emailDetails.subject}`);
+        console.log(`   🔗 ${pasteUrl.trim()}`);
+      }
+
+      // Small delay between uploads
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+
+    console.log('\n===================================\n');
+
+    return { ...state, emailPasteUrls };
+  })
   .step('Send NTFY notifications', async ({ state, ntfy }) => {
     if (state.emailsWithActionItems.length === 0) {
       console.log('No action items to notify about');
@@ -283,37 +328,23 @@ Return a notification message for each email.`;
 
     console.log('\n=== SENDING NOTIFICATIONS ===\n');
 
-    // Map account names to friendly labels
-    const accountLabels: Record<string, string> = {
-      account1: 'planningforaliens',
-      account2: 'sofware',
-      account3: 'gmail',
-    };
-
     for (const notification of state.notificationData.notifications) {
-      // Find the matching email to get the message ID and account
+      // Find the matching email to get the body for paste.rs
       const emailDetails = state.messageDetails.find(
         (detail: any) => detail.subject === notification.emailSubject
       );
 
-      const gmailUrl = emailDetails?.id
-        ? `https://mail.google.com/mail/u/0/#inbox/${emailDetails.id}`
+      // Get paste.rs link from the earlier step
+      const pasteUrl = emailDetails
+        ? state.emailPasteUrls[emailDetails.subject]
         : undefined;
 
-      // Add account label to message
-      const accountLabel = emailDetails?.account
-        ? accountLabels[emailDetails.account] || emailDetails.account
-        : '';
-      const messageWithAccount = accountLabel
-        ? `[${accountLabel}] ${notification.message}`
-        : notification.message;
-
-      console.log(`📱 ${messageWithAccount}`);
-      if (gmailUrl) {
-        console.log(`   🔗 ${gmailUrl}`);
+      console.log(`📱 ${notification.message}`);
+      if (pasteUrl) {
+        console.log(`   🔗 ${pasteUrl}`);
       }
 
-      await ntfy.send(messageWithAccount, gmailUrl);
+      await ntfy.send(notification.message, pasteUrl);
 
       // Small delay between notifications
       await new Promise((resolve) => setTimeout(resolve, 300));
