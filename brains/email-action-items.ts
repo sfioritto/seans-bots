@@ -64,10 +64,11 @@ const emailActionItemsBrain = brain('email-action-items')
       totalMessages: allMessages.length,
     };
   })
-  .step('Fetch message details', async ({ state, gmail }) => {
-    if (state.allMessages.length === 0) {
+  .step('Fetch message details', async ({ state: { allMessages, ...rest }, gmail }) => {
+    if (allMessages.length === 0) {
       return {
-        ...state,
+        allMessages,
+        ...rest,
         messageDetails: [],
       };
     }
@@ -78,9 +79,9 @@ const emailActionItemsBrain = brain('email-action-items')
     const messageDetails: { account: string; id: string; subject: string; from: string; date: string; body: string }[] = [];
 
     console.log('\n=== EMAILS FOUND ===\n');
-    console.log(`Found ${state.allMessages.length} emails matching search criteria:\n`);
+    console.log(`Found ${allMessages.length} emails matching search criteria:\n`);
 
-    for (const message of state.allMessages) {
+    for (const message of allMessages) {
       const refreshToken = accountTokenMap.get(message.account);
       if (!refreshToken) continue;
 
@@ -101,7 +102,8 @@ const emailActionItemsBrain = brain('email-action-items')
     console.log('\n===================\n');
 
     return {
-      ...state,
+      allMessages,
+      ...rest,
       messageDetails,
     };
   })
@@ -170,9 +172,9 @@ Return ONLY emails with real action items where I need to DO something with cons
       name: 'actionItems' as const,
     },
   })
-  .step('Format final output', ({ state }) => {
+  .step('Format final output', ({ state: { actionItems, messageDetails, ...rest } }) => {
     // Filter out emails with no action items
-    const emailsWithActionItems = state.actionItems.actionItems.filter(
+    const emailsWithActionItems = actionItems.actionItems.filter(
       (email: any) => email.items.length > 0
     );
 
@@ -189,7 +191,7 @@ Return ONLY emails with real action items where I need to DO something with cons
       console.log(`\n📧 ${index + 1}. ${emailGroup.email}`);
 
       // Find the matching email details
-      const emailDetails = state.messageDetails.find(
+      const emailDetails = messageDetails.find(
         (detail: any) => detail.subject === emailGroup.email
       );
 
@@ -227,7 +229,9 @@ Return ONLY emails with real action items where I need to DO something with cons
     console.log('\n=========================\n');
 
     return {
-      ...state,
+      actionItems,
+      messageDetails,
+      ...rest,
       emailsWithActionItems,
       summary: {
         totalEmails: emailsWithActionItems.length,
@@ -275,18 +279,18 @@ Return a notification message for each email.`;
       name: 'notificationData' as const,
     },
   })
-  .step('Upload emails to paste.rs', async ({ state }) => {
-    if (state.emailsWithActionItems.length === 0) {
-      return { ...state, emailPasteUrls: {} };
+  .step('Upload emails to paste.rs', async ({ state: { emailsWithActionItems, messageDetails, ...rest } }) => {
+    if (emailsWithActionItems.length === 0) {
+      return { emailsWithActionItems, messageDetails, ...rest, emailPasteUrls: {} };
     }
 
     console.log('\n=== UPLOADING EMAILS TO PASTE.RS ===\n');
 
     const emailPasteUrls: Record<string, string> = {};
 
-    for (const emailGroup of state.emailsWithActionItems) {
+    for (const emailGroup of emailsWithActionItems) {
       // Find the full email details
-      const emailDetails = state.messageDetails.find(
+      const emailDetails = messageDetails.find(
         (detail: any) => detail.subject === emailGroup.email
       );
 
@@ -318,25 +322,25 @@ ${emailDetails.body}`;
 
     console.log('\n===================================\n');
 
-    return { ...state, emailPasteUrls };
+    return { emailsWithActionItems, messageDetails, ...rest, emailPasteUrls };
   })
-  .step('Send NTFY notifications', async ({ state, ntfy }) => {
-    if (state.emailsWithActionItems.length === 0) {
+  .step('Send NTFY notifications', async ({ state: { emailsWithActionItems, messageDetails, notificationData, emailPasteUrls, ...rest }, ntfy }) => {
+    if (emailsWithActionItems.length === 0) {
       console.log('No action items to notify about');
-      return state;
+      return { emailsWithActionItems, messageDetails, notificationData, emailPasteUrls, ...rest };
     }
 
     console.log('\n=== SENDING NOTIFICATIONS ===\n');
 
-    for (const notification of state.notificationData.notifications) {
+    for (const notification of notificationData.notifications) {
       // Find the matching email to get the body for paste.rs
-      const emailDetails = state.messageDetails.find(
+      const emailDetails = messageDetails.find(
         (detail: any) => detail.subject === notification.emailSubject
       );
 
       // Get paste.rs link from the earlier step
       const pasteUrl = emailDetails
-        ? state.emailPasteUrls[emailDetails.subject]
+        ? emailPasteUrls[emailDetails.subject]
         : undefined;
 
       console.log(`📱 ${notification.message}`);
@@ -353,8 +357,12 @@ ${emailDetails.body}`;
     console.log('\n=============================\n');
 
     return {
-      ...state,
-      notificationsSent: state.notificationData.notifications.length,
+      emailsWithActionItems,
+      messageDetails,
+      notificationData,
+      emailPasteUrls,
+      ...rest,
+      notificationsSent: notificationData.notifications.length,
     };
   });
 
