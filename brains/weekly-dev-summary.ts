@@ -27,11 +27,47 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
       await new Promise(r => setTimeout(r, 100));
     }
 
-    console.log(`Fetched ${allCommits.length} commits from ${repos.length} repos`);
+    // Filter out merge commits
+    const filteredCommits = allCommits.filter(commit => {
+      const message = commit.message.toLowerCase();
+      return !message.startsWith('merge pull request') &&
+             !message.startsWith('merge branch') &&
+             !message.match(/^merge [a-f0-9]+ into/);
+    });
+
+    console.log(`Fetched ${allCommits.length} commits, ${filteredCommits.length} after filtering merges`);
 
     return {
       ...state,
-      rawCommits: allCommits,
+      rawCommits: filteredCommits,
+    };
+  })
+
+  .step('Fetch commit stats', async ({ state, github }) => {
+    const commitsWithStats: any[] = [];
+    const repos = github.getRepoList();
+    const repoOwnerMap = new Map(repos.map(r => [r.repo, r.owner]));
+
+    console.log(`Fetching stats for ${state.rawCommits.length} commits...`);
+
+    for (const commit of state.rawCommits) {
+      const owner = repoOwnerMap.get(commit.repo) || 'SOFware';
+      const stats = await github.getCommitStats(owner, commit.repo, commit.sha);
+
+      commitsWithStats.push({
+        ...commit,
+        stats: stats || { additions: 0, deletions: 0, total: 0, files: [] },
+      });
+
+      // Rate limit protection
+      await new Promise(r => setTimeout(r, 50));
+    }
+
+    console.log(`Fetched stats for ${commitsWithStats.length} commits`);
+
+    return {
+      ...state,
+      rawCommits: commitsWithStats,
     };
   })
 
@@ -198,30 +234,33 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
   .prompt('Generate developer summaries', developerSummaryPrompt)
 
   .step('Format Slack message', ({ state }) => {
-    const { developerSummaries, weekStart, weekEnd } = state;
+    const { developerSummaries, weekStart } = state;
 
     const formatDate = (isoString: string) => {
       const date = new Date(isoString);
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      return date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
     };
 
-    const header = `*Weekly Developer Summary*\n_${formatDate(weekStart)} - ${formatDate(weekEnd)}_\n`;
+    // Thread starter message
+    const threadStarter = `Developer Summary for week of ${formatDate(weekStart)} 🧵`;
 
+    // Full details for thread reply
     const sections = developerSummaries.summaries
-      .filter((dev: any) => dev.accomplishments && dev.accomplishments.length > 0)
+      .filter((dev: any) => dev.summary)
       .map((dev: any) => {
-        const bullets = dev.accomplishments.map((a: string) => `  • ${a}`).join('\n');
-        return `*${dev.name}*\n${bullets}`;
+        const bullets = dev.accomplishments && dev.accomplishments.length > 0
+          ? dev.accomplishments.map((a: string) => `  • ${a}`).join('\n')
+          : '';
+        return `*${dev.name}*: ${dev.summary}${bullets ? '\n' + bullets : ''}`;
       })
       .join('\n\n');
 
-    const slackMessage = sections
-      ? `${header}\n${sections}`
-      : `${header}\n_No developer activity this week._`;
+    const threadReply = sections || '_No developer activity this week._';
 
     return {
       ...state,
-      slackMessage,
+      threadStarter,
+      threadReply,
     };
   })
 
@@ -233,7 +272,8 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
       throw new Error('SLACK_BOT_TOKEN environment variable is not set');
     }
 
-    const response = await fetch('https://slack.com/api/chat.postMessage', {
+    // Post thread starter message
+    const starterResponse = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${slackBotToken}`,
@@ -241,23 +281,50 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
       },
       body: JSON.stringify({
         channel: channelId,
-        text: state.slackMessage,
+        text: state.threadStarter,
         unfurl_links: false,
         unfurl_media: false,
       }),
     });
 
-    const result = await response.json();
+    const starterResult = await starterResponse.json();
 
-    if (!result.ok) {
-      throw new Error(`Slack API error: ${result.error}`);
+    if (!starterResult.ok) {
+      throw new Error(`Slack API error: ${starterResult.error}`);
     }
 
-    console.log(`Posted summary to Slack DM`);
+    // Post details as thread reply
+    const replyResponse = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${slackBotToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: channelId,
+        text: state.threadReply,
+        thread_ts: starterResult.ts,
+        unfurl_links: false,
+        unfurl_media: false,
+      }),
+    });
+
+    const replyResult = await replyResponse.json();
+
+    if (!replyResult.ok) {
+      throw new Error(`Slack API error (thread reply): ${replyResult.error}`);
+    }
+
+    console.log(`Posted summary to Slack as thread`);
 
     return {
       ...state,
-      slackResponse: { ok: result.ok, ts: result.ts, channel: result.channel },
+      slackResponse: {
+        ok: true,
+        starterTs: starterResult.ts,
+        replyTs: replyResult.ts,
+        channel: starterResult.channel,
+      },
     };
   });
 

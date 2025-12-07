@@ -47,6 +47,15 @@ function createMockGitHub() {
     getCommits: async () => commits,
     getMergedPRs: async () => prs,
     getChangelog: async () => changelog,
+    getCommitStats: async () => ({
+      additions: 50,
+      deletions: 10,
+      total: 60,
+      files: [
+        { filename: 'src/auth.ts', status: 'modified', additions: 40, deletions: 5 },
+        { filename: 'src/utils.ts', status: 'modified', additions: 10, deletions: 5 },
+      ],
+    }),
     mockCommits: (c: any[]) => { commits = c; },
     mockPRs: (p: any[]) => { prs = p; },
     mockChangelog: (c: string | null) => { changelog = c; },
@@ -101,19 +110,23 @@ describe('weekly-dev-summary brain', () => {
           { canonicalName: 'Jane Doe', emails: ['jane@example.com'], githubUsernames: [] },
         ],
       },
-      // 2. Developer summaries
+      // 2. Developer summaries (casual one-liner + bullets)
       {
         summaries: [
           {
             name: 'John Smith',
+            summary: 'Heavy lifting on the auth system this week',
             accomplishments: [
-              'Implemented OAuth2 authentication system',
-              'Fixed token refresh bug in authentication flow',
+              '[Large] Implemented OAuth2 login flow',
+              '[Small fix] Fixed token refresh bug',
             ],
           },
           {
             name: 'Jane Doe',
-            accomplishments: ['Updated dashboard widget'],
+            summary: 'Knocked out some dashboard improvements',
+            accomplishments: [
+              '[Medium] Updated dashboard widget',
+            ],
           },
         ],
       }
@@ -130,8 +143,17 @@ describe('weekly-dev-summary brain', () => {
     expect(result.error).toBeNull();
     expect(result.finalState.developerSummaries).toBeDefined();
     expect(result.finalState.developerSummaries.summaries).toHaveLength(2);
-    expect(result.finalState.slackMessage).toContain('John Smith');
-    expect(result.finalState.slackMessage).toContain('Jane Doe');
+    // Check thread starter
+    expect(result.finalState.threadStarter).toContain('Developer Summary for week of');
+    expect(result.finalState.threadStarter).toContain('🧵');
+    // Check thread reply contains names and summaries
+    expect(result.finalState.threadReply).toContain('John Smith');
+    expect(result.finalState.threadReply).toContain('Jane Doe');
+    expect(result.finalState.threadReply).toContain('Heavy lifting on the auth system');
+    expect(result.finalState.threadReply).toContain('Knocked out some dashboard improvements');
+    // Check for bullet points
+    expect(result.finalState.threadReply).toContain('[Large] Implemented OAuth2 login flow');
+    expect(result.finalState.threadReply).toContain('[Medium] Updated dashboard widget');
   });
 
   it('should handle repos with no commits gracefully', async () => {
@@ -157,6 +179,7 @@ describe('weekly-dev-summary brain', () => {
     expect(result.completed).toBe(true);
     expect(result.finalState.rawCommits).toHaveLength(0);
     expect(result.finalState.developerSummaries.summaries).toHaveLength(0);
+    expect(result.finalState.threadReply).toContain('No developer activity this week');
   });
 
   it('should deduplicate developers with multiple email addresses', async () => {
@@ -180,6 +203,12 @@ describe('weekly-dev-summary brain', () => {
       ],
       getMergedPRs: async () => [],
       getChangelog: async () => null,
+      getCommitStats: async () => ({
+        additions: 30,
+        deletions: 5,
+        total: 35,
+        files: [{ filename: 'src/feature.ts', status: 'added', additions: 30, deletions: 5 }],
+      }),
     };
 
     const mockClient = createMockClient();
@@ -198,7 +227,11 @@ describe('weekly-dev-summary brain', () => {
         summaries: [
           {
             name: 'John Smith',
-            accomplishments: ['Added feature A', 'Added feature B'],
+            summary: 'Knocked out a couple quick features',
+            accomplishments: [
+              '[Small] Added feature A',
+              '[Small] Added feature B',
+            ],
           },
         ],
       }

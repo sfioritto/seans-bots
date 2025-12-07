@@ -3,6 +3,20 @@
  * Uses GitHub REST API v3 with personal access token
  */
 
+interface FileChange {
+  filename: string;
+  status: string; // added, modified, removed, renamed
+  additions: number;
+  deletions: number;
+}
+
+interface CommitStats {
+  additions: number;
+  deletions: number;
+  total: number;
+  files: FileChange[];
+}
+
 interface Commit {
   sha: string;
   repo: string;
@@ -12,6 +26,7 @@ interface Commit {
     date: string;
   };
   message: string;
+  stats?: CommitStats;
 }
 
 interface PullRequest {
@@ -245,6 +260,39 @@ async function getChangelog(owner: string, repo: string): Promise<string | null>
 }
 
 /**
+ * Fetch stats (additions/deletions) and file changes for a specific commit
+ */
+async function getCommitStats(
+  owner: string,
+  repo: string,
+  sha: string
+): Promise<CommitStats | null> {
+  try {
+    const response = await makeGitHubRequest(
+      `/repos/${owner}/${repo}/commits/${sha}`
+    );
+    const data = await response.json();
+
+    const files: FileChange[] = (data.files || []).map((f: any) => ({
+      filename: f.filename || '',
+      status: f.status || 'modified',
+      additions: f.additions || 0,
+      deletions: f.deletions || 0,
+    }));
+
+    return {
+      additions: data.stats?.additions || 0,
+      deletions: data.stats?.deletions || 0,
+      total: data.stats?.total || 0,
+      files,
+    };
+  } catch (error) {
+    console.error(`Error fetching stats for commit ${sha}:`, error);
+    return null;
+  }
+}
+
+/**
  * Get the list of repositories to analyze
  */
 function getRepoList(): RepoInfo[] {
@@ -259,6 +307,7 @@ export const github = {
   getCommits,
   getMergedPRs,
   getChangelog,
+  getCommitStats,
 };
 
 export default github;
