@@ -1,6 +1,7 @@
 import { brain as coreBrain, type BrainFactory } from '@positronic/core';
 import gmail from './services/gmail.js';
 import ntfy from './services/ntfy.js';
+import github from './services/github.js';
 
 /**
  * Base brain factory for this project.
@@ -71,5 +72,6 @@ export const brain = (brainConfig: string | { title: string; description?: strin
   return coreBrain(brainConfig).withServices({
     gmail,
     ntfy,
+    github,
   });
 };
