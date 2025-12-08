@@ -56,6 +56,12 @@ function createMockGitHub() {
         { filename: 'src/utils.ts', status: 'modified', additions: 10, deletions: 5 },
       ],
     }),
+    getPRReviews: async () => [
+      { user: 'jsmith', count: 2 },
+    ],
+    getPRReviewComments: async () => [
+      { user: 'jsmith', count: 5 },
+    ],
     mockCommits: (c: any[]) => { commits = c; },
     mockPRs: (p: any[]) => { prs = p; },
     mockChangelog: (c: string | null) => { changelog = c; },
@@ -165,6 +171,14 @@ describe('weekly-dev-summary brain', () => {
     expect(result.finalState.threadReply).toContain('giving the ops team better visibility');
     // Check for PR link
     expect(result.finalState.threadReply).toContain('github.com/SOFware/test-repo-1/pull/42');
+    // Check for metadata
+    expect(result.finalState.threadReply).toContain('lines changed');
+    expect(result.finalState.threadReply).toContain('commits');
+    expect(result.finalState.threadReply).toContain('PRs merged');
+    expect(result.finalState.threadReply).toContain('PRs reviewed');
+    expect(result.finalState.threadReply).toContain('PR comments');
+    // Check for Summary header
+    expect(result.finalState.threadReply).toContain('Summary:');
   });
 
   it('should handle repos with no commits gracefully', async () => {
@@ -220,6 +234,8 @@ describe('weekly-dev-summary brain', () => {
         total: 35,
         files: [{ filename: 'src/feature.ts', status: 'added', additions: 30, deletions: 5 }],
       }),
+      getPRReviews: async () => [],
+      getPRReviewComments: async () => [],
     };
 
     const mockClient = createMockClient();

@@ -110,6 +110,41 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
     };
   })
 
+  .step('Fetch PR reviews and comments', async ({ state, github }) => {
+    const repos = github.getRepoList();
+    const allReviews: { user: string; count: number }[] = [];
+    const allComments: { user: string; count: number }[] = [];
+
+    for (const { owner, repo } of repos) {
+      const reviews = await github.getPRReviews(owner, repo, new Date(state.weekStart));
+      allReviews.push(...reviews);
+
+      const comments = await github.getPRReviewComments(owner, repo, new Date(state.weekStart));
+      allComments.push(...comments);
+
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    // Aggregate by user
+    const reviewsByUser = new Map<string, number>();
+    for (const { user, count } of allReviews) {
+      reviewsByUser.set(user, (reviewsByUser.get(user) || 0) + count);
+    }
+
+    const commentsByUser = new Map<string, number>();
+    for (const { user, count } of allComments) {
+      commentsByUser.set(user, (commentsByUser.get(user) || 0) + count);
+    }
+
+    console.log(`Fetched reviews from ${reviewsByUser.size} reviewers, comments from ${commentsByUser.size} commenters`);
+
+    return {
+      ...state,
+      reviewsByUser: Object.fromEntries(reviewsByUser),
+      commentsByUser: Object.fromEntries(commentsByUser),
+    };
+  })
+
   .step('Fetch CHANGELOG files', async ({ state, github }) => {
     const repos = github.getRepoList();
     const changelogs: { repo: string; content: string }[] = [];
@@ -184,7 +219,7 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
   .prompt('Deduplicate developer identities', nameDedupPrompt)
 
   .step('Merge duplicate developer identities', ({ state }) => {
-    const { nameDeduplication, developerData, rawPRs } = state;
+    const { nameDeduplication, developerData, rawPRs, reviewsByUser, commentsByUser } = state;
 
     // Build email-to-canonical-name mapping
     const emailToCanonical = new Map<string, string>();
@@ -205,8 +240,17 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
     const mergedDevelopers = new Map<string, {
       name: string;
       emails: string[];
+      githubUsernames: string[];
       commits: any[];
       prs: any[];
+      meta: {
+        additions: number;
+        deletions: number;
+        totalCommits: number;
+        totalPRs: number;
+        prsReviewed: number;
+        prComments: number;
+      };
     }>();
 
     for (const dev of developerData) {
@@ -216,8 +260,17 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
         mergedDevelopers.set(canonical, {
           name: canonical,
           emails: [],
+          githubUsernames: canonicalToUsernames.get(canonical) || [],
           commits: [],
           prs: [],
+          meta: {
+            additions: 0,
+            deletions: 0,
+            totalCommits: 0,
+            totalPRs: 0,
+            prsReviewed: 0,
+            prComments: 0,
+          },
         });
       }
 
@@ -242,6 +295,24 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
       }
     }
 
+    // Calculate metadata for each developer
+    for (const [canonical, dev] of mergedDevelopers) {
+      // Calculate additions/deletions from commits
+      for (const commit of dev.commits) {
+        dev.meta.additions += commit.stats?.additions || 0;
+        dev.meta.deletions += commit.stats?.deletions || 0;
+      }
+      dev.meta.totalCommits = dev.commits.length;
+      dev.meta.totalPRs = dev.prs.length;
+
+      // Get reviews and comments by matching GitHub usernames
+      for (const username of dev.githubUsernames) {
+        const lowerUsername = username.toLowerCase();
+        dev.meta.prsReviewed += reviewsByUser[lowerUsername] || 0;
+        dev.meta.prComments += commentsByUser[lowerUsername] || 0;
+      }
+    }
+
     const developers = Array.from(mergedDevelopers.values());
 
     console.log(`Merged into ${developers.length} unique developers`);
@@ -255,12 +326,18 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
   .prompt('Generate developer summaries', developerSummaryPrompt)
 
   .step('Format Slack message', ({ state }) => {
-    const { developerSummaries, weekStart } = state;
+    const { developerSummaries, developers, weekStart } = state;
 
     const formatDate = (isoString: string) => {
       const date = new Date(isoString);
       return date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' });
     };
+
+    // Build a map of developer metadata by name
+    const metaByName = new Map<string, any>();
+    for (const dev of developers) {
+      metaByName.set(dev.name, dev.meta);
+    }
 
     // Thread starter message
     const threadStarter = `Developer Summary for week of ${formatDate(weekStart)} 🧵`;
@@ -269,19 +346,32 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
     const sections = developerSummaries.summaries
       .filter((dev: any) => dev.summary)
       .map((dev: any) => {
-        const bullets = dev.accomplishments && dev.accomplishments.length > 0
+        const meta = metaByName.get(dev.name) || {};
+
+        // Format metadata bullets
+        const metaBullets = [
+          `• +${meta.additions || 0}/-${meta.deletions || 0} lines changed`,
+          `• ${meta.totalCommits || 0} commits`,
+          `• ${meta.totalPRs || 0} PRs merged`,
+          `• ${meta.prsReviewed || 0} PRs reviewed`,
+          `• ${meta.prComments || 0} PR comments`,
+        ].join('\n\n');
+
+        // Format accomplishment bullets with PR links
+        const summaryBullets = dev.accomplishments && dev.accomplishments.length > 0
           ? dev.accomplishments.map((a: any) => {
               const prLinks = a.relatedPRs && a.relatedPRs.length > 0
                 ? ' ' + a.relatedPRs.map((pr: any) =>
                     `<https://github.com/SOFware/${pr.repo}/pull/${pr.number}|#${pr.number}>`
                   ).join(' ')
                 : '';
-              return `  • ${a.text}${prLinks}`;
-            }).join('\n')
+              return `• ${a.text}${prLinks}`;
+            }).join('\n\n')
           : '';
-        return `*${dev.name}*: ${dev.summary}${bullets ? '\n' + bullets : ''}`;
+
+        return `*${dev.name}*\n\n${metaBullets}\n\n_${dev.summary}_\n\nSummary:\n\n${summaryBullets}`;
       })
-      .join('\n\n');
+      .join('\n\n---\n\n');
 
     const threadReply = sections || '_No developer activity this week._';
 

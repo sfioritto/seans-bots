@@ -293,6 +293,144 @@ async function getCommitStats(
 }
 
 /**
+ * Fetch PR review comments (comments on diffs) for a repository within a date range
+ */
+async function getPRReviewComments(
+  owner: string,
+  repo: string,
+  since: Date
+): Promise<{ user: string; count: number }[]> {
+  const commentsByUser = new Map<string, number>();
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const params = new URLSearchParams({
+      sort: 'created',
+      direction: 'desc',
+      per_page: '100',
+      page: String(page),
+      since: since.toISOString(),
+    });
+
+    try {
+      const response = await makeGitHubRequest(
+        `/repos/${owner}/${repo}/pulls/comments?${params}`
+      );
+      const data = await response.json();
+
+      if (!Array.isArray(data) || data.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const comment of data) {
+        const user = comment.user?.login?.toLowerCase() || '';
+        if (user) {
+          commentsByUser.set(user, (commentsByUser.get(user) || 0) + 1);
+        }
+      }
+
+      const linkHeader = response.headers.get('Link');
+      hasMore = linkHeader?.includes('rel="next"') ?? false;
+      page++;
+
+      await new Promise(r => setTimeout(r, 100));
+    } catch (error) {
+      console.error(`Error fetching PR comments for ${owner}/${repo}:`, error);
+      hasMore = false;
+    }
+  }
+
+  return Array.from(commentsByUser.entries()).map(([user, count]) => ({ user, count }));
+}
+
+/**
+ * Fetch PR reviews (approvals, changes requested, comments) for a repository within a date range
+ */
+async function getPRReviews(
+  owner: string,
+  repo: string,
+  since: Date
+): Promise<{ user: string; count: number }[]> {
+  const reviewsByUser = new Map<string, number>();
+
+  // First get all PRs updated in the time range
+  let page = 1;
+  let hasMore = true;
+  const prNumbers: number[] = [];
+
+  while (hasMore) {
+    const params = new URLSearchParams({
+      state: 'all',
+      sort: 'updated',
+      direction: 'desc',
+      per_page: '100',
+      page: String(page),
+    });
+
+    try {
+      const response = await makeGitHubRequest(
+        `/repos/${owner}/${repo}/pulls?${params}`
+      );
+      const data = await response.json();
+
+      if (!Array.isArray(data) || data.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const pr of data) {
+        const updatedAt = new Date(pr.updated_at);
+        if (updatedAt >= since) {
+          prNumbers.push(pr.number);
+        } else {
+          hasMore = false;
+          break;
+        }
+      }
+
+      const linkHeader = response.headers.get('Link');
+      hasMore = hasMore && (linkHeader?.includes('rel="next"') ?? false);
+      page++;
+
+      await new Promise(r => setTimeout(r, 100));
+    } catch (error) {
+      console.error(`Error fetching PRs for reviews ${owner}/${repo}:`, error);
+      hasMore = false;
+    }
+  }
+
+  // Now fetch reviews for each PR
+  for (const prNumber of prNumbers) {
+    try {
+      const response = await makeGitHubRequest(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews`
+      );
+      const reviews = await response.json();
+
+      if (Array.isArray(reviews)) {
+        for (const review of reviews) {
+          const submittedAt = new Date(review.submitted_at);
+          if (submittedAt >= since) {
+            const user = review.user?.login?.toLowerCase() || '';
+            if (user && review.state !== 'PENDING') {
+              reviewsByUser.set(user, (reviewsByUser.get(user) || 0) + 1);
+            }
+          }
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 50));
+    } catch (error) {
+      // Some PRs might not have reviews accessible
+    }
+  }
+
+  return Array.from(reviewsByUser.entries()).map(([user, count]) => ({ user, count }));
+}
+
+/**
  * Get the list of repositories to analyze
  */
 function getRepoList(): RepoInfo[] {
@@ -308,6 +446,8 @@ export const github = {
   getMergedPRs,
   getChangelog,
   getCommitStats,
+  getPRReviewComments,
+  getPRReviews,
 };
 
 export default github;
