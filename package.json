@@ -12,10 +12,12 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@ai-sdk/openai": "^1.3.22",
+    "@ai-sdk/google": "^2.0.44",
+    "@ai-sdk/openai": "^2.0.80",
     "@positronic/client-vercel": "^0.0.21",
     "@positronic/cloudflare": "^0.0.21",
     "@positronic/core": "^0.0.21",
+    "ai": "^5.0.108",
     "googleapis": "^164.1.0"
   },
   "devDependencies": {

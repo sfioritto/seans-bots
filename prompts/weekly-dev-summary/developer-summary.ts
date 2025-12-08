@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { VercelClient } from '@positronic/client-vercel';
+
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
+
+const geminiClient = new VercelClient(google('gemini-2.5-pro'));
 
 interface FileChange {
   filename: string;
@@ -187,4 +195,5 @@ GUIDELINES:
     }),
     name: 'developerSummaries' as const,
   },
+  client: geminiClient,
 };
