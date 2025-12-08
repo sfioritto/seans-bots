@@ -132,41 +132,41 @@ ${changelogSection || 'None available'}
 TASK:
 For each developer, provide:
 1. ONE casual sentence that captures the vibe of their week
-2. A list of specific accomplishments (2-5 bullet points)
+2. A list of accomplishments (2-5 bullet points)
 
 TONE FOR SUMMARY: Casual, friendly, like a quick standup update. Examples:
-- "Knocked out some low-hanging fruit this week"
-- "Merged a couple big changes"
+- "Focused on the auth system this week"
+- "Shipped a couple improvements"
 - "Quiet week, just some minor fixes"
-- "Heavy lifting on the auth refactor"
-- "Crushed a bunch of bugs"
-- "Lots of test coverage improvements"
-- "Big feature push this week"
+- "Working through the dashboard refactor"
+- "Bug fixing mode"
+- "Big feature push"
 
-ACCOMPLISHMENT BULLETS:
-- Group related commits into meaningful accomplishments
-- Each bullet should describe WHAT was done (not just repeat commit messages)
-- Include size/effort context inline, e.g. "[Large] Refactored auth system" or "[Small fix] Edge case in validation"
-- Size tags: [Large], [Medium], [Small], [Small fix]
-- Focus on impact, not just activity
+ACCOMPLISHMENT BULLETS - THIS IS THE IMPORTANT PART:
+Write ONE complete sentence per accomplishment that explains:
+- WHAT was done
+- WHY it matters (business impact or developer impact)
 
-ASSESSMENT CRITERIA:
-- Look at TOTAL lines changed AND number of files
-- Consider file TYPES (core code vs tests vs config)
-- Large lines in config/generated files = less impressive than small targeted code changes
-- Many files touched = potentially complex coordination
-- Commits mentioning "refactor", "fix edge case", "performance" = harder work
-- PR descriptions with lots of detail = likely complex changes
+Write for a mixed audience - even non-developers should get the general idea.
 
-SIZE/IMPACT GUIDE:
-- [Small fix]: <20 lines, single file, minor tweak
-- [Small]: 20-50 lines, routine work
-- [Medium]: 50-200 lines, meaningful feature or fix
-- [Large]: 200+ lines OR complex multi-file changes
+GOOD EXAMPLES:
+- "Added password reset flow so users can recover their accounts without contacting support."
+- "Fixed a bug where checkout would fail for international customers, which was blocking sales in Europe."
+- "Refactored the notification system to make it easier for other developers to add new notification types."
+- "Updated the dashboard to show real-time order status, giving the ops team better visibility."
+- "Cleaned up old database queries that were slowing down page loads for customers."
+
+BAD EXAMPLES (don't do these):
+- "Fixed bug" (too vague, no context)
+- "Updated auth.ts" (just describing files, not impact)
+- "Refactored code" (what code? why?)
+- "[Large] Implemented OAuth2" (no size tags, explain the why)
 
 GUIDELINES:
-- Be honest - if someone had a light week, say so casually (no judgment)
-- If someone did impressive work, acknowledge it
+- Group related commits into single accomplishments
+- Focus on impact: Who benefits? What problem does it solve?
+- Use plain language - avoid jargon when possible
+- If a change is purely technical, explain how it helps other developers
 - Skip developers with zero commits`;
   },
   outputSchema: {
@@ -174,7 +174,7 @@ GUIDELINES:
       summaries: z.array(z.object({
         name: z.string().describe('Developer name'),
         summary: z.string().describe('One casual sentence about their week'),
-        accomplishments: z.array(z.string()).describe('List of specific accomplishments with size tags'),
+        accomplishments: z.array(z.string()).describe('List of accomplishments - complete sentences explaining what and why'),
       })).describe('Summary for each developer'),
     }),
     name: 'developerSummaries' as const,

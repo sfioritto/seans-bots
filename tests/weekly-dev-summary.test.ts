@@ -110,22 +110,22 @@ describe('weekly-dev-summary brain', () => {
           { canonicalName: 'Jane Doe', emails: ['jane@example.com'], githubUsernames: [] },
         ],
       },
-      // 2. Developer summaries (casual one-liner + bullets)
+      // 2. Developer summaries (casual one-liner + impact-focused bullets)
       {
         summaries: [
           {
             name: 'John Smith',
-            summary: 'Heavy lifting on the auth system this week',
+            summary: 'Focused on the auth system this week',
             accomplishments: [
-              '[Large] Implemented OAuth2 login flow',
-              '[Small fix] Fixed token refresh bug',
+              'Added OAuth2 login flow so users can sign in with their Google accounts instead of creating new passwords.',
+              'Fixed a bug where auth tokens would expire too early, which was causing users to get logged out unexpectedly.',
             ],
           },
           {
             name: 'Jane Doe',
-            summary: 'Knocked out some dashboard improvements',
+            summary: 'Shipped some dashboard improvements',
             accomplishments: [
-              '[Medium] Updated dashboard widget',
+              'Updated the dashboard widget to show real-time data, giving the ops team better visibility into current orders.',
             ],
           },
         ],
@@ -149,11 +149,11 @@ describe('weekly-dev-summary brain', () => {
     // Check thread reply contains names and summaries
     expect(result.finalState.threadReply).toContain('John Smith');
     expect(result.finalState.threadReply).toContain('Jane Doe');
-    expect(result.finalState.threadReply).toContain('Heavy lifting on the auth system');
-    expect(result.finalState.threadReply).toContain('Knocked out some dashboard improvements');
-    // Check for bullet points
-    expect(result.finalState.threadReply).toContain('[Large] Implemented OAuth2 login flow');
-    expect(result.finalState.threadReply).toContain('[Medium] Updated dashboard widget');
+    expect(result.finalState.threadReply).toContain('Focused on the auth system');
+    expect(result.finalState.threadReply).toContain('Shipped some dashboard improvements');
+    // Check for impact-focused bullet points
+    expect(result.finalState.threadReply).toContain('OAuth2 login flow so users can sign in');
+    expect(result.finalState.threadReply).toContain('giving the ops team better visibility');
   });
 
   it('should handle repos with no commits gracefully', async () => {
@@ -229,8 +229,8 @@ describe('weekly-dev-summary brain', () => {
             name: 'John Smith',
             summary: 'Knocked out a couple quick features',
             accomplishments: [
-              '[Small] Added feature A',
-              '[Small] Added feature B',
+              'Added feature A to improve the onboarding flow for new users.',
+              'Added feature B to help the support team track customer issues more easily.',
             ],
           },
         ],
