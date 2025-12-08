@@ -190,11 +190,30 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
 
   .step('Post to Slack', async ({ state }) => {
     const slackBotToken = process.env.SLACK_BOT_TOKEN;
-    const channelId = 'UDFFLKPM5'; // DM to Sean
 
     if (!slackBotToken) {
       throw new Error('SLACK_BOT_TOKEN environment variable is not set');
     }
+
+    // Open a group DM with Sean and Jim
+    const conversationResponse = await fetch('https://slack.com/api/conversations.open', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${slackBotToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        users: 'UDFFLKPM5,U046M09P1JA', // Sean and Jim
+      }),
+    });
+
+    const conversationResult = await conversationResponse.json();
+
+    if (!conversationResult.ok) {
+      throw new Error(`Slack API error (conversations.open): ${conversationResult.error}`);
+    }
+
+    const channelId = conversationResult.channel.id;
 
     // Post thread starter message
     const starterResponse = await fetch('https://slack.com/api/chat.postMessage', {
