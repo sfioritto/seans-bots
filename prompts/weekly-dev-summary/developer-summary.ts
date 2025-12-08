@@ -93,8 +93,8 @@ export const developerSummaryPrompt = {
         : '';
 
       const prList = dev.prs.map(pr => {
-        const bodyPreview = pr.body ? pr.body.slice(0, 200) : 'No description';
-        return `- ${pr.repo} #${pr.number}: ${pr.title}\n  Description: ${bodyPreview}`;
+        const body = pr.body || 'No description';
+        return `- ${pr.repo} #${pr.number}: ${pr.title}\n  Description: ${body}`;
       }).join('\n');
 
       return `---
@@ -146,6 +146,7 @@ ACCOMPLISHMENT BULLETS - THIS IS THE IMPORTANT PART:
 Write ONE complete sentence per accomplishment that explains:
 - WHAT was done
 - WHY it matters (business impact or developer impact)
+- Which PRs are related (by repo and number)
 
 Write for a mixed audience - even non-developers should get the general idea.
 
@@ -164,6 +165,7 @@ BAD EXAMPLES (don't do these):
 
 GUIDELINES:
 - Group related commits into single accomplishments
+- Link each accomplishment to the relevant PR(s) if any exist
 - Focus on impact: Who benefits? What problem does it solve?
 - Use plain language - avoid jargon when possible
 - If a change is purely technical, explain how it helps other developers
@@ -174,7 +176,13 @@ GUIDELINES:
       summaries: z.array(z.object({
         name: z.string().describe('Developer name'),
         summary: z.string().describe('One casual sentence about their week'),
-        accomplishments: z.array(z.string()).describe('List of accomplishments - complete sentences explaining what and why'),
+        accomplishments: z.array(z.object({
+          text: z.string().describe('Complete sentence explaining what was done and why'),
+          relatedPRs: z.array(z.object({
+            repo: z.string().describe('Repository name'),
+            number: z.number().describe('PR number'),
+          })).describe('PRs related to this accomplishment'),
+        })).describe('List of accomplishments with linked PRs'),
       })).describe('Summary for each developer'),
     }),
     name: 'developerSummaries' as const,

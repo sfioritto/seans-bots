@@ -110,22 +110,31 @@ describe('weekly-dev-summary brain', () => {
           { canonicalName: 'Jane Doe', emails: ['jane@example.com'], githubUsernames: [] },
         ],
       },
-      // 2. Developer summaries (casual one-liner + impact-focused bullets)
+      // 2. Developer summaries (casual one-liner + impact-focused bullets with PR links)
       {
         summaries: [
           {
             name: 'John Smith',
             summary: 'Focused on the auth system this week',
             accomplishments: [
-              'Added OAuth2 login flow so users can sign in with their Google accounts instead of creating new passwords.',
-              'Fixed a bug where auth tokens would expire too early, which was causing users to get logged out unexpectedly.',
+              {
+                text: 'Added OAuth2 login flow so users can sign in with their Google accounts instead of creating new passwords.',
+                relatedPRs: [{ repo: 'test-repo-1', number: 42 }],
+              },
+              {
+                text: 'Fixed a bug where auth tokens would expire too early, which was causing users to get logged out unexpectedly.',
+                relatedPRs: [],
+              },
             ],
           },
           {
             name: 'Jane Doe',
             summary: 'Shipped some dashboard improvements',
             accomplishments: [
-              'Updated the dashboard widget to show real-time data, giving the ops team better visibility into current orders.',
+              {
+                text: 'Updated the dashboard widget to show real-time data, giving the ops team better visibility into current orders.',
+                relatedPRs: [],
+              },
             ],
           },
         ],
@@ -154,6 +163,8 @@ describe('weekly-dev-summary brain', () => {
     // Check for impact-focused bullet points
     expect(result.finalState.threadReply).toContain('OAuth2 login flow so users can sign in');
     expect(result.finalState.threadReply).toContain('giving the ops team better visibility');
+    // Check for PR link
+    expect(result.finalState.threadReply).toContain('github.com/SOFware/test-repo-1/pull/42');
   });
 
   it('should handle repos with no commits gracefully', async () => {
@@ -229,8 +240,14 @@ describe('weekly-dev-summary brain', () => {
             name: 'John Smith',
             summary: 'Knocked out a couple quick features',
             accomplishments: [
-              'Added feature A to improve the onboarding flow for new users.',
-              'Added feature B to help the support team track customer issues more easily.',
+              {
+                text: 'Added feature A to improve the onboarding flow for new users.',
+                relatedPRs: [],
+              },
+              {
+                text: 'Added feature B to help the support team track customer issues more easily.',
+                relatedPRs: [],
+              },
             ],
           },
         ],

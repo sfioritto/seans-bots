@@ -27,12 +27,24 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
       await new Promise(r => setTimeout(r, 100));
     }
 
-    // Filter out merge commits
+    // Users to ignore
+    const ignoredUsers = ['dependabot', 'dependabot[bot]', 'sofware', 'claude'];
+
+    // Filter out merge commits and ignored users
     const filteredCommits = allCommits.filter(commit => {
       const message = commit.message.toLowerCase();
-      return !message.startsWith('merge pull request') &&
-             !message.startsWith('merge branch') &&
-             !message.match(/^merge [a-f0-9]+ into/);
+      const authorName = commit.author?.name?.toLowerCase() || '';
+      const authorEmail = commit.author?.email?.toLowerCase() || '';
+
+      const isMerge = message.startsWith('merge pull request') ||
+                      message.startsWith('merge branch') ||
+                      message.match(/^merge [a-f0-9]+ into/);
+
+      const isIgnoredUser = ignoredUsers.some(user =>
+        authorName.includes(user) || authorEmail.includes(user)
+      );
+
+      return !isMerge && !isIgnoredUser;
     });
 
     console.log(`Fetched ${allCommits.length} commits, ${filteredCommits.length} after filtering merges`);
@@ -75,17 +87,26 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
     const repos = github.getRepoList();
     const allPRs: any[] = [];
 
+    // Users to ignore
+    const ignoredUsers = ['dependabot', 'dependabot[bot]', 'sofware', 'claude'];
+
     for (const { owner, repo } of repos) {
       const prs = await github.getMergedPRs(owner, repo, new Date(state.weekStart));
       allPRs.push(...prs);
       await new Promise(r => setTimeout(r, 100));
     }
 
-    console.log(`Fetched ${allPRs.length} merged PRs`);
+    // Filter out ignored users
+    const filteredPRs = allPRs.filter(pr => {
+      const author = pr.author?.toLowerCase() || '';
+      return !ignoredUsers.some(user => author.includes(user));
+    });
+
+    console.log(`Fetched ${allPRs.length} merged PRs, ${filteredPRs.length} after filtering`);
 
     return {
       ...state,
-      rawPRs: allPRs,
+      rawPRs: filteredPRs,
     };
   })
 
@@ -249,7 +270,14 @@ const weeklyDevSummaryBrain = brain('weekly-dev-summary')
       .filter((dev: any) => dev.summary)
       .map((dev: any) => {
         const bullets = dev.accomplishments && dev.accomplishments.length > 0
-          ? dev.accomplishments.map((a: string) => `  • ${a}`).join('\n')
+          ? dev.accomplishments.map((a: any) => {
+              const prLinks = a.relatedPRs && a.relatedPRs.length > 0
+                ? ' ' + a.relatedPRs.map((pr: any) =>
+                    `<https://github.com/SOFware/${pr.repo}/pull/${pr.number}|#${pr.number}>`
+                  ).join(' ')
+                : '';
+              return `  • ${a.text}${prLinks}`;
+            }).join('\n')
           : '';
         return `*${dev.name}*: ${dev.summary}${bullets ? '\n' + bullets : ''}`;
       })
