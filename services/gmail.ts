@@ -158,6 +158,29 @@ async function getMessageDetails(
 }
 
 /**
+ * Archive messages by removing the INBOX label
+ */
+async function archiveMessages(
+  refreshToken: string,
+  messageIds: string[]
+): Promise<void> {
+  const gmail = createGmailClient(refreshToken);
+
+  for (const messageId of messageIds) {
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: messageId,
+      requestBody: {
+        removeLabelIds: ['INBOX']
+      }
+    });
+
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+/**
  * Get configured Gmail accounts from environment variables
  */
 function getConfiguredAccounts(): GmailAccount[] {
@@ -195,6 +218,11 @@ export const gmail = {
    * Get full details of a message
    */
   getMessageDetails,
+
+  /**
+   * Archive messages by removing from inbox
+   */
+  archiveMessages,
 
   /**
    * Search across all configured accounts
