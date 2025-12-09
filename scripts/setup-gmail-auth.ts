@@ -42,7 +42,7 @@ const oauth2Client = new google.auth.OAuth2(
 // Generate the authorization URL
 const authUrl = oauth2Client.generateAuthUrl({
   access_type: 'offline', // Required to get refresh token
-  scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+  scope: ['https://www.googleapis.com/auth/gmail.modify'],
   prompt: 'consent' // Force consent screen to ensure we get refresh token
 });
 

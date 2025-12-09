@@ -174,8 +174,8 @@ const amazonEmailSummaryBrain = brain('amazon-email-summary')
       };
     }
 
-    // Search for unread, unarchived Amazon emails from the last 7 days
-    const query = 'label:inbox is:unread from:amazon.com newer_than:7d';
+    // Search for unread, unarchived Amazon emails
+    const query = 'label:inbox is:unread from:amazon.com';
     const messages = await gmail.searchMessages(account2.refreshToken, query, 100);
 
     if (messages.length === 0) {
