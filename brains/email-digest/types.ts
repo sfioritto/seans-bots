@@ -25,6 +25,21 @@ export interface ActionItemsMap {
   [emailId: string]: ActionItem[];
 }
 
+// Isaac-related emails (school, rock climbing, summer camps, etc.)
+export interface IsaacEmail {
+  emailId: string;
+  rawEmail: RawEmail;
+  category: 'school' | 'rock_climbing' | 'summer_camp' | 'choir' | 'extracurricular' | 'health' | 'other';
+  summary: string;
+  actionItems: Array<{
+    description: string;
+    exactQuote: string;
+    context: string;
+    link: string;
+    steps: string[];
+  }>;
+}
+
 // Amazon emails
 export interface AmazonEmail {
   emailId: string;
@@ -61,6 +76,7 @@ export interface NewsletterEmail {
 
 // Processed results by category
 export interface ProcessedEmails {
+  isaac: IsaacEmail[];
   amazon: AmazonEmail[];
   receipts: ReceiptEmail[];
   kickstarter: KickstarterEmail[];

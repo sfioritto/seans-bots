@@ -56,8 +56,9 @@ describe('email-digest', () => {
     const mockNtfy = createMockNtfy();
     const mockPages = createMockPages();
 
-    // Mock responses for all 5 processors in order: amazon, receipts, kickstarter, newsletters, action items
+    // Mock responses for all 6 processors in order: isaac, amazon, receipts, kickstarter, newsletters, action items
     mockClient.mockResponses(
+      { isaacEmails: [] },
       { categorizedEmails: [] },
       { receiptEmails: [] },
       { kickstarterEmails: [] },
@@ -133,56 +134,51 @@ describe('email-digest', () => {
     const mockPages = createMockPages();
 
     mockClient.mockResponses(
-      // 1. Amazon (claims email-2)
+      // 1. Isaac (claims email-1 - school related)
+      {
+        isaacEmails: [
+          { emailId: 'email-1', isIsaacRelated: true, category: 'school', summary: 'Field trip permission slip reminder', actionItems: [
+            { description: 'Sign permission slip', exactQuote: 'Please sign and return the permission slip by Friday', context: 'Field trip permission required', link: '', steps: ['Sign the slip', 'Return to school'] }
+          ]},
+          { emailId: 'email-2', isIsaacRelated: false },
+          { emailId: 'email-3', isIsaacRelated: false },
+          { emailId: 'email-4', isIsaacRelated: false },
+          { emailId: 'email-5', isIsaacRelated: false },
+        ],
+      },
+      // 2. Amazon (claims email-2, skips email-1)
       {
         categorizedEmails: [
-          { emailId: 'email-1', isAmazon: false },
           { emailId: 'email-2', isAmazon: true, category: 'shipping_notification', summary: 'Package shipped' },
           { emailId: 'email-3', isAmazon: false },
           { emailId: 'email-4', isAmazon: false },
           { emailId: 'email-5', isAmazon: false },
         ],
       },
-      // 2. Receipts (claims email-3, skips email-2)
+      // 3. Receipts (claims email-3, skips email-1, email-2)
       {
         receiptEmails: [
-          { emailId: 'email-1', isReceipt: false },
           { emailId: 'email-3', isReceipt: true, merchant: 'Uber', summary: 'Ride receipt', charges: [{ description: 'Ride', amount: '$15.50' }] },
           { emailId: 'email-4', isReceipt: false },
           { emailId: 'email-5', isReceipt: false },
         ],
       },
-      // 3. Kickstarter (claims email-4)
+      // 4. Kickstarter (claims email-4)
       {
         kickstarterEmails: [
-          { emailId: 'email-1', isKickstarterRelated: false },
           { emailId: 'email-4', isKickstarterRelated: true, summary: 'Board game project shipped', actionItems: [] },
           { emailId: 'email-5', isKickstarterRelated: false },
         ],
       },
-      // 4. Newsletters (claims email-1 and email-5)
+      // 5. Newsletters (claims email-5)
       {
         newsletterEmails: [
-          { emailId: 'email-1', isNewsletter: true, newsletterName: 'School Update', summary: 'Field trip permission slip reminder', deadlines: ['Friday'] },
           { emailId: 'email-5', isNewsletter: true, newsletterName: 'Morning Brew', summary: 'Daily business news roundup', deadlines: [] },
         ],
       },
-      // 5. Action Items (runs last, extracts from all categorized emails)
+      // 6. Action Items (runs last, extracts from non-Isaac categorized emails)
       {
-        emailActionItems: [
-          {
-            emailId: 'email-1',
-            items: [
-              {
-                description: 'Sign permission slip',
-                exactQuote: 'Please sign and return the permission slip by Friday',
-                context: 'Field trip permission required',
-                link: '',
-                steps: ['Sign the slip', 'Return to school'],
-              },
-            ],
-          },
-        ],
+        emailActionItems: [],
       }
     );
 
@@ -199,14 +195,14 @@ describe('email-digest', () => {
     expect(result.finalState.allEmails).toHaveLength(5);
 
     // Check that each processor claimed the correct emails
+    expect(result.finalState.processedIsaac).toHaveLength(1);
     expect(result.finalState.processedAmazon).toHaveLength(1);
     expect(result.finalState.processedReceipts).toHaveLength(1);
     expect(result.finalState.processedKickstarter).toHaveLength(1);
-    expect(result.finalState.processedNewsletters).toHaveLength(2);
+    expect(result.finalState.processedNewsletters).toHaveLength(1);
 
-    // Action items are now attached to emails by ID, not a separate array
-    expect(Object.keys(result.finalState.actionItemsMap)).toHaveLength(1);
-    expect(result.finalState.actionItemsMap['email-1']).toHaveLength(1);
+    // Isaac emails have action items embedded
+    expect(result.finalState.processedIsaac[0].actionItems).toHaveLength(1);
 
     // Verify page was created
     expect(mockPages.create).toHaveBeenCalled();
@@ -216,6 +212,7 @@ describe('email-digest', () => {
     expect(mockNtfy.send).toHaveBeenCalled();
     const notificationMessage = (mockNtfy.send as any).mock.calls[0][0];
     expect(notificationMessage).toContain('action items');
+    expect(notificationMessage).toContain('Isaac');
     expect(notificationMessage).toContain('Amazon');
     expect(notificationMessage).toContain('receipts');
     expect(notificationMessage).toContain('Kickstarter');
@@ -242,6 +239,8 @@ describe('email-digest', () => {
     const mockPages = createMockPages();
 
     mockClient.mockResponses(
+      // Isaac doesn't claim it (not Isaac-related)
+      { isaacEmails: [{ emailId: 'email-1', isIsaacRelated: false }] },
       // Amazon claims it first
       {
         categorizedEmails: [
@@ -316,6 +315,7 @@ describe('email-digest', () => {
     const mockPages = createMockPages();
 
     mockClient.mockResponses(
+      { isaacEmails: [{ emailId: 'email-1', isIsaacRelated: false }, { emailId: 'email-2', isIsaacRelated: false }] },
       { categorizedEmails: [{ emailId: 'email-1', isAmazon: true, category: 'shipping_notification', summary: 'Package shipped' }, { emailId: 'email-2', isAmazon: false }] },
       { receiptEmails: [{ emailId: 'email-2', isReceipt: false }] },
       { kickstarterEmails: [{ emailId: 'email-2', isKickstarterRelated: false }] },
@@ -358,6 +358,7 @@ describe('email-digest', () => {
     const mockPages = createMockPages();
 
     mockClient.mockResponses(
+      { isaacEmails: [] },
       { categorizedEmails: [] },
       { receiptEmails: [] },
       { kickstarterEmails: [] },

@@ -1,5 +1,6 @@
 import { brain } from '../brain.js';
 import { archiveWebhook } from '../webhooks/archive.js';
+import * as isaac from './email-digest/processors/isaac.js';
 import * as actionItems from './email-digest/processors/action-items.js';
 import * as amazon from './email-digest/processors/amazon.js';
 import * as receipts from './email-digest/processors/receipts.js';
@@ -19,6 +20,7 @@ const emailDigestBrain = brain('email-digest')
         ...state,
         allEmails: [] as any[],
         claimedEmailIds: [] as string[],
+        processedIsaac: [] as any[],
         processedAmazon: [] as any[],
         processedReceipts: [] as any[],
         processedKickstarter: [] as any[],
@@ -65,6 +67,7 @@ const emailDigestBrain = brain('email-digest')
       ...state,
       allEmails,
       claimedEmailIds: [] as string[],
+      processedIsaac: [] as any[],
       processedAmazon: [] as any[],
       processedReceipts: [] as any[],
       processedKickstarter: [] as any[],
@@ -73,7 +76,36 @@ const emailDigestBrain = brain('email-digest')
     };
   })
 
-  // Step 2: Process AMAZON emails (first priority for categorization)
+  // Step 2: Process ISAAC emails (highest priority - school, rock climbing, camps, etc.)
+  .prompt('Identify Isaac-related emails', {
+    template: ({ allEmails, claimedEmailIds }) => {
+      const emails = allEmails as any[];
+      const claimed = (claimedEmailIds || []) as string[];
+      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
+      return isaac.buildIdentificationPrompt(unclaimed);
+    },
+    outputSchema: {
+      schema: isaac.isaacIdentificationSchema,
+      name: 'isaacResult' as const,
+    },
+  })
+  .step('Process Isaac results', ({ state }) => {
+    const emails = state.allEmails as any[];
+    const claimed = (state.claimedEmailIds || []) as string[];
+    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
+    const processed = isaac.processResults(unclaimed, state.isaacResult);
+    const newClaimed = [...claimed, ...isaac.getClaimedIds(processed)];
+
+    console.log(`Found ${processed.length} Isaac-related emails`);
+
+    return {
+      ...state,
+      claimedEmailIds: newClaimed,
+      processedIsaac: processed as any[],
+    };
+  })
+
+  // Step 3: Process AMAZON emails
   .prompt('Identify Amazon emails', {
     template: ({ allEmails, claimedEmailIds }) => {
       const emails = allEmails as any[];
@@ -240,6 +272,7 @@ const emailDigestBrain = brain('email-digest')
   // Step 7: Generate unified HTML page
   .step('Generate unified summary page', async ({ state, pages }) => {
     const processedData: ProcessedEmails = {
+      isaac: state.processedIsaac as any[],
       amazon: state.processedAmazon as any[],
       receipts: state.processedReceipts as any[],
       kickstarter: state.processedKickstarter as any[],
@@ -248,6 +281,7 @@ const emailDigestBrain = brain('email-digest')
     };
 
     const totalEmails =
+      processedData.isaac.length +
       processedData.amazon.length +
       processedData.receipts.length +
       processedData.kickstarter.length +
@@ -287,6 +321,7 @@ const emailDigestBrain = brain('email-digest')
     }
 
     const processedData: ProcessedEmails = {
+      isaac: state.processedIsaac as any[],
       amazon: state.processedAmazon as any[],
       receipts: state.processedReceipts as any[],
       kickstarter: state.processedKickstarter as any[],
@@ -294,9 +329,13 @@ const emailDigestBrain = brain('email-digest')
       actionItemsMap: state.actionItemsMap as any,
     };
 
-    const totalActionItems = actionItems.countActionItems(processedData.actionItemsMap);
+    // Count action items from actionItemsMap (for non-Isaac emails) + Isaac action items
+    const actionItemsFromMap = actionItems.countActionItems(processedData.actionItemsMap);
+    const isaacActionItems = processedData.isaac.reduce((sum, e) => sum + e.actionItems.length, 0);
+    const totalActionItems = actionItemsFromMap + isaacActionItems;
 
     const counts = [
+      processedData.isaac.length > 0 ? `${processedData.isaac.length} Isaac` : null,
       processedData.amazon.length > 0 ? `${processedData.amazon.length} Amazon` : null,
       processedData.receipts.length > 0 ? `${processedData.receipts.length} receipts` : null,
       processedData.kickstarter.length > 0 ? `${processedData.kickstarter.length} Kickstarter` : null,

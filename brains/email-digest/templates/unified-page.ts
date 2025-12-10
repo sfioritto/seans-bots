@@ -1,5 +1,6 @@
-import type { ProcessedEmails, ActionItem } from '../types.js';
-import { categoryLabels } from '../processors/amazon.js';
+import type { ProcessedEmails, ActionItem, IsaacEmail } from '../types.js';
+import { categoryLabels as amazonCategoryLabels } from '../processors/amazon.js';
+import { categoryLabels as isaacCategoryLabels } from '../processors/isaac.js';
 import { countActionItems } from '../processors/action-items.js';
 
 interface CategoryConfig {
@@ -10,6 +11,7 @@ interface CategoryConfig {
 }
 
 const categories: CategoryConfig[] = [
+  { id: 'isaac', label: 'Isaac', color: '#ef4444', borderColor: '#dc2626' },
   { id: 'amazon', label: 'Amazon', color: '#ff9900', borderColor: '#e88b00' },
   { id: 'receipts', label: 'Receipts', color: '#059669', borderColor: '#047857' },
   { id: 'kickstarter', label: 'Kickstarter', color: '#05ce78', borderColor: '#04b569' },
@@ -38,6 +40,57 @@ function renderInlineActionItems(actionItems: ActionItem[] | undefined): string 
   `;
 }
 
+// Helper to render Isaac action items (they have a slightly different structure)
+function renderIsaacActionItems(actionItems: IsaacEmail['actionItems']): string {
+  if (!actionItems || actionItems.length === 0) return '';
+
+  return `
+    <ul class="action-list">
+      ${actionItems.map(item => `
+        <li class="action-item">
+          <strong>${item.description}</strong>
+          ${item.context ? `<span class="context">${item.context}</span>` : ''}
+          ${item.link ? `<a href="${item.link}" target="_blank" class="action-link">Complete action</a>` : ''}
+          ${item.steps.length > 0 ? `
+            <ol class="action-steps">
+              ${item.steps.map(step => `<li>${step}</li>`).join('')}
+            </ol>
+          ` : ''}
+        </li>
+      `).join('')}
+    </ul>
+  `;
+}
+
+function renderIsaacSection(processed: ProcessedEmails): string {
+  if (processed.isaac.length === 0) return '';
+
+  // Group by category
+  const byCategory: Record<string, typeof processed.isaac> = {};
+  for (const email of processed.isaac) {
+    if (!byCategory[email.category]) byCategory[email.category] = [];
+    byCategory[email.category].push(email);
+  }
+
+  return Object.entries(byCategory).map(([category, emails]) => `
+    <div class="subcategory">
+      <h3>${isaacCategoryLabels[category] || category}</h3>
+      ${emails.map(email => `
+        <div class="email-item ${email.actionItems.length > 0 ? 'has-action-items' : ''}">
+          <label class="checkbox-label">
+            <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
+            <div class="email-content">
+              <span class="email-subject">${email.rawEmail.subject}</span>
+              <span class="summary">${email.summary}</span>
+              ${renderIsaacActionItems(email.actionItems)}
+            </div>
+          </label>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
 function renderAmazonSection(processed: ProcessedEmails): string {
   if (processed.amazon.length === 0) return '';
 
@@ -50,7 +103,7 @@ function renderAmazonSection(processed: ProcessedEmails): string {
 
   return Object.entries(byCategory).map(([category, emails]) => `
     <div class="subcategory">
-      <h3>${categoryLabels[category] || category}</h3>
+      <h3>${amazonCategoryLabels[category] || category}</h3>
       ${emails.map(email => `
         <div class="email-item">
           <label class="checkbox-label">
@@ -139,6 +192,7 @@ export function generateUnifiedPage(
   webhookUrl: string
 ): string {
   const counts = {
+    isaac: processed.isaac.length,
     amazon: processed.amazon.length,
     receipts: processed.receipts.length,
     kickstarter: processed.kickstarter.length,
@@ -146,10 +200,14 @@ export function generateUnifiedPage(
   };
 
   const totalEmails = Object.values(counts).reduce((a, b) => a + b, 0);
-  const totalActionItems = countActionItems(processed.actionItemsMap);
+  // Count action items from both the map and Isaac emails
+  const actionItemsFromMap = countActionItems(processed.actionItemsMap);
+  const isaacActionItems = processed.isaac.reduce((sum, e) => sum + e.actionItems.length, 0);
+  const totalActionItems = actionItemsFromMap + isaacActionItems;
 
   // Collect all email IDs
   const allEmailIds = [
+    ...processed.isaac.map(e => e.emailId),
     ...processed.amazon.map(e => e.emailId),
     ...processed.receipts.map(e => e.emailId),
     ...processed.kickstarter.map(e => e.emailId),
@@ -158,7 +216,7 @@ export function generateUnifiedPage(
 
   // Build tabs for categories with emails
   const activeTabs = categories.filter(cat => counts[cat.id as keyof typeof counts] > 0);
-  const firstActiveTab = activeTabs[0]?.id || 'amazon';
+  const firstActiveTab = activeTabs[0]?.id || 'isaac';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -387,6 +445,14 @@ export function generateUnifiedPage(
       cursor: pointer;
     }
     .select-btn:hover { background: #f9fafb; }
+    .has-action-items {
+      border-left: 3px solid #ef4444;
+      background: #fef2f2;
+    }
+    .email-subject {
+      font-weight: 600;
+      color: #1f2937;
+    }
   </style>
 </head>
 <body>
@@ -406,6 +472,18 @@ export function generateUnifiedPage(
   <form class="archive-form" action="${webhookUrl}" method="POST">
     <input type="hidden" name="sessionId" value="${sessionId}">
     <input type="hidden" name="allEmailIds" value='${JSON.stringify(allEmailIds)}'>
+
+    ${counts.isaac > 0 ? `
+      <div id="isaac" class="tab-content ${firstActiveTab === 'isaac' ? 'active' : ''}">
+        <div class="select-all-container">
+          <label>
+            <input type="checkbox" class="select-all-tab" data-tab="isaac" checked>
+            Select All Isaac
+          </label>
+        </div>
+        ${renderIsaacSection(processed)}
+      </div>
+    ` : ''}
 
     ${counts.amazon > 0 ? `
       <div id="amazon" class="tab-content ${firstActiveTab === 'amazon' ? 'active' : ''}">
