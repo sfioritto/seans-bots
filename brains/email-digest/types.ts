@@ -7,6 +7,8 @@ export interface RawEmail {
   date: string;
   body: string;
   snippet: string;
+  accountName: string;
+  refreshToken: string;
 }
 
 // Action item that can be attached to any email

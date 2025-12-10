@@ -9,9 +9,18 @@ describe('email-digest', () => {
     mockClient = createMockClient();
   });
 
-  const createMockGmail = (emails: any[] = []) => ({
-    getAccounts: () => [{ name: 'account2', refreshToken: 'test-token' }],
-    searchMessages: jest.fn(async () => emails.map((e) => ({ id: e.id, threadId: e.id, snippet: e.snippet }))),
+  const createMockGmail = (emails: any[] = [], accounts = [
+    { name: 'account1', refreshToken: 'test-token-1' },
+    { name: 'account2', refreshToken: 'test-token-2' },
+    { name: 'account3', refreshToken: 'test-token-3' },
+  ]) => ({
+    getAccounts: () => accounts,
+    searchMessages: jest.fn(async (token: string) => {
+      // Return emails that match the account's token
+      const account = accounts.find(a => a.refreshToken === token);
+      const accountEmails = emails.filter(e => e.accountName === account?.name);
+      return accountEmails.map((e) => ({ id: e.id, threadId: e.id, snippet: e.snippet }));
+    }),
     getMessageDetails: jest.fn(async (_token: string, messageId: string) => {
       const email = emails.find((e) => e.id === messageId);
       return email || { id: messageId, subject: '', from: '', date: '', body: '', snippet: '' };
@@ -79,6 +88,7 @@ describe('email-digest', () => {
         date: '2024-01-15',
         body: 'Please sign and return the permission slip by Friday...',
         snippet: 'Permission slip needed',
+        accountName: 'account1',
       },
       {
         id: 'email-2',
@@ -87,6 +97,7 @@ describe('email-digest', () => {
         date: '2024-01-16',
         body: 'Your package is on the way...',
         snippet: 'Package shipped',
+        accountName: 'account2',
       },
       {
         id: 'email-3',
@@ -95,6 +106,7 @@ describe('email-digest', () => {
         date: '2024-01-17',
         body: 'Thanks for riding with Uber. Total: $15.50',
         snippet: 'Uber receipt',
+        accountName: 'account1',
       },
       {
         id: 'email-4',
@@ -103,6 +115,7 @@ describe('email-digest', () => {
         date: '2024-01-18',
         body: 'Your backed project has shipped!',
         snippet: 'Project update',
+        accountName: 'account3',
       },
       {
         id: 'email-5',
@@ -111,6 +124,7 @@ describe('email-digest', () => {
         date: '2024-01-19',
         body: 'Good morning! Here\'s your daily business news...',
         snippet: 'Daily business news',
+        accountName: 'account2',
       },
     ];
 
@@ -219,6 +233,7 @@ describe('email-digest', () => {
         date: '2024-01-15',
         body: 'Your order of School Supplies has shipped. Total: $45.99...',
         snippet: 'Order shipped',
+        accountName: 'account1',
       },
     ];
 
@@ -283,6 +298,7 @@ describe('email-digest', () => {
         date: '2024-01-15',
         body: 'Your order is on the way',
         snippet: 'Package shipped',
+        accountName: 'account1',
       },
       {
         id: 'email-2',
@@ -291,6 +307,7 @@ describe('email-digest', () => {
         date: '2024-01-16',
         body: 'Daily news...',
         snippet: 'News',
+        accountName: 'account2',
       },
     ];
 

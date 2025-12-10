@@ -9,17 +9,15 @@ import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
 import type { ProcessedEmails, RawEmail } from './email-digest/types.js';
 
 const emailDigestBrain = brain('email-digest')
-  // Step 1: Fetch ALL inbox emails once
-  .step('Fetch all inbox emails', async ({ state, gmail }) => {
+  // Step 1: Fetch ALL inbox emails from ALL accounts
+  .step('Fetch all inbox emails from all accounts', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();
-    const account2 = accounts.find((a) => a.name === 'account2');
 
-    if (!account2) {
-      console.log('No account2 configured');
+    if (accounts.length === 0) {
+      console.log('No Gmail accounts configured');
       return {
         ...state,
-        allEmails: [] as { id: string; subject: string; from: string; date: string; body: string; snippet: string }[],
-        refreshToken: '',
+        allEmails: [] as any[],
         claimedEmailIds: [] as string[],
         processedAmazon: [] as any[],
         processedReceipts: [] as any[],
@@ -29,44 +27,43 @@ const emailDigestBrain = brain('email-digest')
       };
     }
 
+    console.log(`Fetching emails from ${accounts.length} accounts...`);
+
+    const allEmails: any[] = [];
     const query = 'label:inbox';
-    const messages = await gmail.searchMessages(account2.refreshToken, query, 100);
 
-    if (messages.length === 0) {
-      console.log('No inbox emails found');
-      return {
-        ...state,
-        allEmails: [] as { id: string; subject: string; from: string; date: string; body: string; snippet: string }[],
-        refreshToken: account2.refreshToken,
-        claimedEmailIds: [] as string[],
-        processedAmazon: [] as any[],
-        processedReceipts: [] as any[],
-        processedKickstarter: [] as any[],
-        processedNewsletters: [] as any[],
-        actionItemsMap: {} as Record<string, any[]>,
-      };
+    for (const account of accounts) {
+      const messages = await gmail.searchMessages(account.refreshToken, query, 100);
+      console.log(`Found ${messages.length} emails in ${account.name}`);
+
+      for (const message of messages) {
+        const details = await gmail.getMessageDetails(account.refreshToken, message.id);
+        allEmails.push({
+          id: message.id,
+          subject: details.subject,
+          from: details.from,
+          date: details.date,
+          body: details.body.substring(0, 2000),
+          snippet: details.snippet,
+          accountName: account.name,
+          refreshToken: account.refreshToken,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      // Small delay between accounts to avoid rate limiting
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
-    console.log(`Found ${messages.length} inbox emails`);
-
-    const allEmails: { id: string; subject: string; from: string; date: string; body: string; snippet: string }[] = [];
-    for (const message of messages) {
-      const details = await gmail.getMessageDetails(account2.refreshToken, message.id);
-      allEmails.push({
-        id: message.id,
-        subject: details.subject,
-        from: details.from,
-        date: details.date,
-        body: details.body.substring(0, 2000),
-        snippet: details.snippet,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    if (allEmails.length === 0) {
+      console.log('No inbox emails found across all accounts');
+    } else {
+      console.log(`Found ${allEmails.length} total inbox emails across ${accounts.length} accounts`);
     }
 
     return {
       ...state,
       allEmails,
-      refreshToken: account2.refreshToken,
       claimedEmailIds: [] as string[],
       processedAmazon: [] as any[],
       processedReceipts: [] as any[],
@@ -328,7 +325,7 @@ const emailDigestBrain = brain('email-digest')
     };
   })
 
-  // Step 10: Archive selected emails
+  // Step 10: Archive selected emails (handles multiple accounts)
   .step('Archive emails', async ({ state, response, gmail }) => {
     if (!state.sessionId) {
       console.log('No emails to archive');
@@ -342,17 +339,35 @@ const emailDigestBrain = brain('email-digest')
       return { ...state, archived: false, archivedCount: 0 };
     }
 
-    const emailIds = webhookResponse.emailIds;
-    console.log(`Archiving ${emailIds.length} emails...`);
+    const selectedEmailIds = new Set(webhookResponse.emailIds);
+    const allEmails = state.allEmails as any[];
 
-    await gmail.archiveMessages(state.refreshToken as string, emailIds);
+    // Group emails by account (refreshToken)
+    const emailsByAccount: Record<string, { refreshToken: string; emailIds: string[] }> = {};
 
-    console.log(`Successfully archived ${emailIds.length} emails`);
+    for (const email of allEmails) {
+      if (selectedEmailIds.has(email.id)) {
+        const key = email.accountName;
+        if (!emailsByAccount[key]) {
+          emailsByAccount[key] = { refreshToken: email.refreshToken, emailIds: [] };
+        }
+        emailsByAccount[key].emailIds.push(email.id);
+      }
+    }
+
+    let totalArchived = 0;
+    for (const [accountName, { refreshToken, emailIds }] of Object.entries(emailsByAccount)) {
+      console.log(`Archiving ${emailIds.length} emails from ${accountName}...`);
+      await gmail.archiveMessages(refreshToken, emailIds);
+      totalArchived += emailIds.length;
+    }
+
+    console.log(`Successfully archived ${totalArchived} emails across ${Object.keys(emailsByAccount).length} accounts`);
 
     return {
       ...state,
       archived: true,
-      archivedCount: emailIds.length,
+      archivedCount: totalArchived,
     };
   });
 
