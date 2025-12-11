@@ -48,13 +48,14 @@ export interface AmazonEmail {
   summary: string;
 }
 
-// Receipt emails
-export interface ReceiptEmail {
+// Billing emails (receipts, invoices, subscriptions, bank statements, etc.)
+export interface BillingEmail {
   emailId: string;
   rawEmail: RawEmail;
-  merchant: string;
+  category: 'receipt' | 'invoice' | 'subscription_renewal' | 'payment_due' | 'bank_statement' | 'payment_confirmation' | 'refund' | 'other';
+  source: string;
   summary: string;
-  charges: Array<{ description: string; amount: string }>;
+  amounts: Array<{ description: string; amount: string }>;
 }
 
 // Kickstarter emails
@@ -74,12 +75,30 @@ export interface NewsletterEmail {
   deadlines: string[];
 }
 
+// Marketing emails
+export interface MarketingEmail {
+  emailId: string;
+  rawEmail: RawEmail;
+  brand: string;
+  summary: string;
+}
+
+// Low-value notification emails (product updates, policy changes, generic announcements)
+export interface NotificationEmail {
+  emailId: string;
+  rawEmail: RawEmail;
+  source: string;
+  summary: string;
+}
+
 // Processed results by category
 export interface ProcessedEmails {
   isaac: IsaacEmail[];
   amazon: AmazonEmail[];
-  receipts: ReceiptEmail[];
+  billing: BillingEmail[];
   kickstarter: KickstarterEmail[];
   newsletters: NewsletterEmail[];
+  marketing: MarketingEmail[];
+  notifications: NotificationEmail[];
   actionItemsMap: ActionItemsMap;  // Action items keyed by email ID
 }

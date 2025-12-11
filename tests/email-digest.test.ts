@@ -56,13 +56,15 @@ describe('email-digest', () => {
     const mockNtfy = createMockNtfy();
     const mockPages = createMockPages();
 
-    // Mock responses for all 6 processors in order: isaac, amazon, receipts, kickstarter, newsletters, action items
+    // Mock responses for all 8 processors in order: isaac, amazon, billing, kickstarter, newsletters, marketing, notifications, action items
     mockClient.mockResponses(
       { isaacEmails: [] },
       { categorizedEmails: [] },
-      { receiptEmails: [] },
+      { billingEmails: [] },
       { kickstarterEmails: [] },
       { newsletterEmails: [] },
+      { marketingEmails: [] },
+      { notificationEmails: [] },
       { emailActionItems: [] }
     );
 
@@ -127,6 +129,24 @@ describe('email-digest', () => {
         snippet: 'Daily business news',
         accountName: 'account2',
       },
+      {
+        id: 'email-6',
+        subject: '50% OFF Everything - Flash Sale!',
+        from: 'deals@brandstore.com',
+        date: '2024-01-20',
+        body: 'Shop now and save big! Limited time offer...',
+        snippet: 'Flash sale',
+        accountName: 'account1',
+      },
+      {
+        id: 'email-7',
+        subject: 'We are updating our Privacy Policy',
+        from: 'legal@someservice.com',
+        date: '2024-01-21',
+        body: 'Important changes to how we handle your data...',
+        snippet: 'Privacy policy update',
+        accountName: 'account2',
+      },
     ];
 
     const mockGmail = createMockGmail(testEmails);
@@ -144,6 +164,8 @@ describe('email-digest', () => {
           { emailId: 'email-3', isIsaacRelated: false },
           { emailId: 'email-4', isIsaacRelated: false },
           { emailId: 'email-5', isIsaacRelated: false },
+          { emailId: 'email-6', isIsaacRelated: false },
+          { emailId: 'email-7', isIsaacRelated: false },
         ],
       },
       // 2. Amazon (claims email-2, skips email-1)
@@ -153,14 +175,18 @@ describe('email-digest', () => {
           { emailId: 'email-3', isAmazon: false },
           { emailId: 'email-4', isAmazon: false },
           { emailId: 'email-5', isAmazon: false },
+          { emailId: 'email-6', isAmazon: false },
+          { emailId: 'email-7', isAmazon: false },
         ],
       },
-      // 3. Receipts (claims email-3, skips email-1, email-2)
+      // 3. Billing (claims email-3, skips email-1, email-2)
       {
-        receiptEmails: [
-          { emailId: 'email-3', isReceipt: true, merchant: 'Uber', summary: 'Ride receipt', charges: [{ description: 'Ride', amount: '$15.50' }] },
-          { emailId: 'email-4', isReceipt: false },
-          { emailId: 'email-5', isReceipt: false },
+        billingEmails: [
+          { emailId: 'email-3', isBilling: true, category: 'receipt', source: 'Uber', summary: 'Ride receipt', amounts: [{ description: 'Ride', amount: '$15.50' }] },
+          { emailId: 'email-4', isBilling: false },
+          { emailId: 'email-5', isBilling: false },
+          { emailId: 'email-6', isBilling: false },
+          { emailId: 'email-7', isBilling: false },
         ],
       },
       // 4. Kickstarter (claims email-4)
@@ -168,15 +194,32 @@ describe('email-digest', () => {
         kickstarterEmails: [
           { emailId: 'email-4', isKickstarterRelated: true, summary: 'Board game project shipped', actionItems: [] },
           { emailId: 'email-5', isKickstarterRelated: false },
+          { emailId: 'email-6', isKickstarterRelated: false },
+          { emailId: 'email-7', isKickstarterRelated: false },
         ],
       },
       // 5. Newsletters (claims email-5)
       {
         newsletterEmails: [
           { emailId: 'email-5', isNewsletter: true, newsletterName: 'Morning Brew', summary: 'Daily business news roundup', deadlines: [] },
+          { emailId: 'email-6', isNewsletter: false },
+          { emailId: 'email-7', isNewsletter: false },
         ],
       },
-      // 6. Action Items (runs last, extracts from non-Isaac categorized emails)
+      // 6. Marketing (claims email-6)
+      {
+        marketingEmails: [
+          { emailId: 'email-6', isMarketing: true, brand: 'Brand Store', summary: '50% off flash sale' },
+          { emailId: 'email-7', isMarketing: false },
+        ],
+      },
+      // 7. Notifications (claims email-7)
+      {
+        notificationEmails: [
+          { emailId: 'email-7', isNotification: true, source: 'Some Service', summary: 'Privacy policy update' },
+        ],
+      },
+      // 8. Action Items (runs last, extracts from non-Isaac categorized emails)
       {
         emailActionItems: [],
       }
@@ -192,14 +235,16 @@ describe('email-digest', () => {
     });
 
     expect(result.completed).toBe(true);
-    expect(result.finalState.allEmails).toHaveLength(5);
+    expect(result.finalState.allEmails).toHaveLength(7);
 
     // Check that each processor claimed the correct emails
     expect(result.finalState.processedIsaac).toHaveLength(1);
     expect(result.finalState.processedAmazon).toHaveLength(1);
-    expect(result.finalState.processedReceipts).toHaveLength(1);
+    expect(result.finalState.processedBilling).toHaveLength(1);
     expect(result.finalState.processedKickstarter).toHaveLength(1);
     expect(result.finalState.processedNewsletters).toHaveLength(1);
+    expect(result.finalState.processedMarketing).toHaveLength(1);
+    expect(result.finalState.processedNotifications).toHaveLength(1);
 
     // Isaac emails have action items embedded
     expect(result.finalState.processedIsaac[0].actionItems).toHaveLength(1);
@@ -214,9 +259,11 @@ describe('email-digest', () => {
     expect(notificationMessage).toContain('action items');
     expect(notificationMessage).toContain('Isaac');
     expect(notificationMessage).toContain('Amazon');
-    expect(notificationMessage).toContain('receipts');
+    expect(notificationMessage).toContain('billing');
     expect(notificationMessage).toContain('Kickstarter');
     expect(notificationMessage).toContain('newsletters');
+    expect(notificationMessage).toContain('marketing');
+    expect(notificationMessage).toContain('notifications');
   });
 
   it('should claim emails on first match (Amazon has priority over receipts)', async () => {
@@ -247,10 +294,12 @@ describe('email-digest', () => {
           { emailId: 'email-1', isAmazon: true, category: 'shipping_notification', summary: 'School supplies shipped' },
         ],
       },
-      // Receipts sees empty list (email-1 already claimed by Amazon)
-      { receiptEmails: [] },
+      // Billing sees empty list (email-1 already claimed by Amazon)
+      { billingEmails: [] },
       { kickstarterEmails: [] },
       { newsletterEmails: [] },
+      { marketingEmails: [] },
+      { notificationEmails: [] },
       // Action items runs last on all categorized emails
       {
         emailActionItems: [
@@ -282,8 +331,8 @@ describe('email-digest', () => {
     expect(result.completed).toBe(true);
     // Amazon claimed it
     expect(result.finalState.processedAmazon).toHaveLength(1);
-    // Receipts did not claim it (was already claimed by Amazon)
-    expect(result.finalState.processedReceipts).toHaveLength(0);
+    // Billing did not claim it (was already claimed by Amazon)
+    expect(result.finalState.processedBilling).toHaveLength(0);
     // Action items were attached to the Amazon email
     expect(result.finalState.actionItemsMap['email-1']).toHaveLength(1);
   });
@@ -317,9 +366,11 @@ describe('email-digest', () => {
     mockClient.mockResponses(
       { isaacEmails: [{ emailId: 'email-1', isIsaacRelated: false }, { emailId: 'email-2', isIsaacRelated: false }] },
       { categorizedEmails: [{ emailId: 'email-1', isAmazon: true, category: 'shipping_notification', summary: 'Package shipped' }, { emailId: 'email-2', isAmazon: false }] },
-      { receiptEmails: [{ emailId: 'email-2', isReceipt: false }] },
+      { billingEmails: [{ emailId: 'email-2', isBilling: false }] },
       { kickstarterEmails: [{ emailId: 'email-2', isKickstarterRelated: false }] },
       { newsletterEmails: [{ emailId: 'email-2', isNewsletter: true, newsletterName: 'Morning Brew', summary: 'Daily business news', deadlines: [] }] },
+      { marketingEmails: [] },
+      { notificationEmails: [] },
       { emailActionItems: [] }
     );
 
@@ -360,9 +411,11 @@ describe('email-digest', () => {
     mockClient.mockResponses(
       { isaacEmails: [] },
       { categorizedEmails: [] },
-      { receiptEmails: [] },
+      { billingEmails: [] },
       { kickstarterEmails: [] },
       { newsletterEmails: [] },
+      { marketingEmails: [] },
+      { notificationEmails: [] },
       { emailActionItems: [] }
     );
 
