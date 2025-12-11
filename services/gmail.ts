@@ -181,6 +181,154 @@ async function archiveMessages(
 }
 
 /**
+ * Mark messages as read by removing the UNREAD label
+ */
+async function markAsRead(
+  refreshToken: string,
+  messageIds: string[]
+): Promise<void> {
+  const gmail = createGmailClient(refreshToken);
+
+  for (const messageId of messageIds) {
+    await gmail.users.messages.modify({
+      userId: 'me',
+      id: messageId,
+      requestBody: {
+        removeLabelIds: ['UNREAD']
+      }
+    });
+
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+/**
+ * Send an email message
+ */
+interface SendMessageOptions {
+  to: string;
+  subject: string;
+  body: string;
+}
+
+async function sendMessage(
+  refreshToken: string,
+  options: SendMessageOptions
+): Promise<{ id: string; threadId: string }> {
+  const gmail = createGmailClient(refreshToken);
+
+  // Build RFC 2822 formatted email
+  const messageParts = [
+    `To: ${options.to}`,
+    `Subject: ${options.subject}`,
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    options.body
+  ];
+
+  const raw = Buffer.from(messageParts.join('\r\n'))
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  const response = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw }
+  });
+
+  return {
+    id: response.data.id || '',
+    threadId: response.data.threadId || ''
+  };
+}
+
+/**
+ * Forward an email message to a recipient, preserving HTML and attachments
+ */
+async function forwardMessage(
+  refreshToken: string,
+  messageId: string,
+  to: string,
+  note?: string
+): Promise<{ id: string; threadId: string }> {
+  const gmail = createGmailClient(refreshToken);
+
+  // Get the original message in raw format (full RFC 2822)
+  const rawResponse = await gmail.users.messages.get({
+    userId: 'me',
+    id: messageId,
+    format: 'raw'
+  });
+
+  // Get message details for headers
+  const original = await getMessageDetails(refreshToken, messageId);
+
+  // Decode the raw message
+  const rawMessage = rawResponse.data.raw || '';
+  const decodedMessage = Buffer.from(
+    rawMessage.replace(/-/g, '+').replace(/_/g, '/'),
+    'base64'
+  ).toString('utf-8');
+
+  // Build forwarded subject
+  const subject = original.subject.startsWith('Fwd:')
+    ? original.subject
+    : `Fwd: ${original.subject}`;
+
+  // Create a new multipart message that wraps the original
+  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+
+  // Build the forwarding note
+  const forwardNote = [
+    note || '',
+    '',
+    '---------- Forwarded message ---------',
+    `From: ${original.from}`,
+    `Date: ${original.date}`,
+    `Subject: ${original.subject}`,
+    ''
+  ].join('\r\n');
+
+  // Create a new message that includes the original as an attachment (message/rfc822)
+  // This preserves all HTML, attachments, and formatting
+  const newMessage = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    `Content-Type: text/plain; charset=utf-8`,
+    '',
+    forwardNote,
+    `--${boundary}`,
+    `Content-Type: message/rfc822`,
+    `Content-Disposition: attachment; filename="forwarded_message.eml"`,
+    '',
+    decodedMessage,
+    `--${boundary}--`
+  ].join('\r\n');
+
+  const raw = Buffer.from(newMessage)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  const response = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw }
+  });
+
+  return {
+    id: response.data.id || '',
+    threadId: response.data.threadId || ''
+  };
+}
+
+/**
  * Get configured Gmail accounts from environment variables
  */
 function getConfiguredAccounts(): GmailAccount[] {
@@ -223,6 +371,21 @@ export const gmail = {
    * Archive messages by removing from inbox
    */
   archiveMessages,
+
+  /**
+   * Mark messages as read
+   */
+  markAsRead,
+
+  /**
+   * Send an email message
+   */
+  sendMessage,
+
+  /**
+   * Forward an email message to a recipient
+   */
+  forwardMessage,
 
   /**
    * Search across all configured accounts
