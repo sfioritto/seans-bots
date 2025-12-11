@@ -2,6 +2,7 @@ import type { ProcessedEmails, ActionItem, IsaacEmail } from '../types.js';
 import { categoryLabels as amazonCategoryLabels } from '../processors/amazon.js';
 import { categoryLabels as isaacCategoryLabels } from '../processors/isaac.js';
 import { categoryLabels as billingCategoryLabels } from '../processors/billing.js';
+import { categoryLabels as investmentCategoryLabels } from '../processors/investments.js';
 import { countActionItems } from '../processors/action-items.js';
 
 interface CategoryConfig {
@@ -15,6 +16,7 @@ const categories: CategoryConfig[] = [
   { id: 'isaac', label: 'Isaac', color: '#ef4444', borderColor: '#dc2626' },
   { id: 'amazon', label: 'Amazon', color: '#ff9900', borderColor: '#e88b00' },
   { id: 'billing', label: 'Billing', color: '#059669', borderColor: '#047857' },
+  { id: 'investments', label: 'Investments', color: '#0891b2', borderColor: '#0e7490' },
   { id: 'kickstarter', label: 'Kickstarter', color: '#05ce78', borderColor: '#04b569' },
   { id: 'newsletters', label: 'Newsletters', color: '#6366f1', borderColor: '#4f46e5' },
   { id: 'marketing', label: 'Marketing', color: '#ec4899', borderColor: '#db2777' },
@@ -158,6 +160,35 @@ function renderBillingSection(processed: ProcessedEmails): string {
   `).join('');
 }
 
+function renderInvestmentsSection(processed: ProcessedEmails): string {
+  if (processed.investments.length === 0) return '';
+
+  // Group by category
+  const byCategory: Record<string, typeof processed.investments> = {};
+  for (const email of processed.investments) {
+    if (!byCategory[email.category]) byCategory[email.category] = [];
+    byCategory[email.category].push(email);
+  }
+
+  return Object.entries(byCategory).map(([category, emails]) => `
+    <div class="subcategory">
+      <h3>${investmentCategoryLabels[category] || category}</h3>
+      ${emails.map(email => `
+        <div class="email-item">
+          <label class="checkbox-label">
+            <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
+            <div class="investment-content">
+              <span class="source-name">${email.source}</span>
+              <span class="summary">${email.summary}</span>
+              ${renderInlineActionItems(processed.actionItemsMap[email.emailId])}
+            </div>
+          </label>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
+
 function renderKickstarterSection(processed: ProcessedEmails): string {
   if (processed.kickstarter.length === 0) return '';
 
@@ -242,6 +273,7 @@ export function generateUnifiedPage(
     isaac: processed.isaac.length,
     amazon: processed.amazon.length,
     billing: processed.billing.length,
+    investments: processed.investments.length,
     kickstarter: processed.kickstarter.length,
     newsletters: processed.newsletters.length,
     marketing: processed.marketing.length,
@@ -259,6 +291,7 @@ export function generateUnifiedPage(
     ...processed.isaac.map(e => e.emailId),
     ...processed.amazon.map(e => e.emailId),
     ...processed.billing.map(e => e.emailId),
+    ...processed.investments.map(e => e.emailId),
     ...processed.kickstarter.map(e => e.emailId),
     ...processed.newsletters.map(e => e.emailId),
     ...processed.marketing.map(e => e.emailId),
@@ -370,7 +403,7 @@ export function generateUnifiedPage(
       height: 18px;
       cursor: pointer;
     }
-    .email-content, .billing-content, .kickstarter-content, .newsletter-content, .marketing-content, .notification-content {
+    .email-content, .billing-content, .investment-content, .kickstarter-content, .newsletter-content, .marketing-content, .notification-content {
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -557,6 +590,18 @@ export function generateUnifiedPage(
           </label>
         </div>
         ${renderBillingSection(processed)}
+      </div>
+    ` : ''}
+
+    ${counts.investments > 0 ? `
+      <div id="investments" class="tab-content ${firstActiveTab === 'investments' ? 'active' : ''}">
+        <div class="select-all-container">
+          <label>
+            <input type="checkbox" class="select-all-tab" data-tab="investments" checked>
+            Select All Investments
+          </label>
+        </div>
+        ${renderInvestmentsSection(processed)}
       </div>
     ` : ''}
 

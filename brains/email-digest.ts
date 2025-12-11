@@ -4,6 +4,7 @@ import * as isaac from './email-digest/processors/isaac.js';
 import * as actionItems from './email-digest/processors/action-items.js';
 import * as amazon from './email-digest/processors/amazon.js';
 import * as billing from './email-digest/processors/billing.js';
+import * as investments from './email-digest/processors/investments.js';
 import * as kickstarter from './email-digest/processors/kickstarter.js';
 import * as newsletters from './email-digest/processors/newsletters.js';
 import * as marketing from './email-digest/processors/marketing.js';
@@ -25,6 +26,7 @@ const emailDigestBrain = brain('email-digest')
         processedIsaac: [] as any[],
         processedAmazon: [] as any[],
         processedBilling: [] as any[],
+        processedInvestments: [] as any[],
         processedKickstarter: [] as any[],
         processedNewsletters: [] as any[],
         processedMarketing: [] as any[],
@@ -74,6 +76,7 @@ const emailDigestBrain = brain('email-digest')
       processedIsaac: [] as any[],
       processedAmazon: [] as any[],
       processedBilling: [] as any[],
+      processedInvestments: [] as any[],
       processedKickstarter: [] as any[],
       processedNewsletters: [] as any[],
       processedMarketing: [] as any[],
@@ -169,7 +172,36 @@ const emailDigestBrain = brain('email-digest')
     };
   })
 
-  // Step 4: Process KICKSTARTER
+  // Step 4b: Process INVESTMENT emails
+  .prompt('Identify investment emails', {
+    template: ({ allEmails, claimedEmailIds }) => {
+      const emails = allEmails as any[];
+      const claimed = (claimedEmailIds || []) as string[];
+      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
+      return investments.buildIdentificationPrompt(unclaimed);
+    },
+    outputSchema: {
+      schema: investments.investmentIdentificationSchema,
+      name: 'investmentsResult' as const,
+    },
+  })
+  .step('Process investments results', ({ state }) => {
+    const emails = state.allEmails as any[];
+    const claimed = (state.claimedEmailIds || []) as string[];
+    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
+    const processed = investments.processResults(unclaimed, state.investmentsResult);
+    const newClaimed = [...claimed, ...investments.getClaimedIds(processed)];
+
+    console.log(`Found ${processed.length} investment emails`);
+
+    return {
+      ...state,
+      claimedEmailIds: newClaimed,
+      processedInvestments: processed as any[],
+    };
+  })
+
+  // Step 5: Process KICKSTARTER
   .prompt('Identify Kickstarter emails', {
     template: ({ allEmails, claimedEmailIds }) => {
       const emails = allEmails as any[];
@@ -296,6 +328,9 @@ const emailDigestBrain = brain('email-digest')
     for (const email of state.processedBilling as any[]) {
       allCategorizedEmails.push(email.rawEmail);
     }
+    for (const email of state.processedInvestments as any[]) {
+      allCategorizedEmails.push(email.rawEmail);
+    }
     for (const email of state.processedKickstarter as any[]) {
       allCategorizedEmails.push(email.rawEmail);
     }
@@ -339,6 +374,7 @@ const emailDigestBrain = brain('email-digest')
       isaac: state.processedIsaac as any[],
       amazon: state.processedAmazon as any[],
       billing: state.processedBilling as any[],
+      investments: state.processedInvestments as any[],
       kickstarter: state.processedKickstarter as any[],
       newsletters: state.processedNewsletters as any[],
       marketing: state.processedMarketing as any[],
@@ -350,6 +386,7 @@ const emailDigestBrain = brain('email-digest')
       processedData.isaac.length +
       processedData.amazon.length +
       processedData.billing.length +
+      processedData.investments.length +
       processedData.kickstarter.length +
       processedData.newsletters.length +
       processedData.marketing.length +
@@ -392,6 +429,7 @@ const emailDigestBrain = brain('email-digest')
       isaac: state.processedIsaac as any[],
       amazon: state.processedAmazon as any[],
       billing: state.processedBilling as any[],
+      investments: state.processedInvestments as any[],
       kickstarter: state.processedKickstarter as any[],
       newsletters: state.processedNewsletters as any[],
       marketing: state.processedMarketing as any[],
@@ -408,6 +446,7 @@ const emailDigestBrain = brain('email-digest')
       processedData.isaac.length > 0 ? `${processedData.isaac.length} Isaac` : null,
       processedData.amazon.length > 0 ? `${processedData.amazon.length} Amazon` : null,
       processedData.billing.length > 0 ? `${processedData.billing.length} billing` : null,
+      processedData.investments.length > 0 ? `${processedData.investments.length} investments` : null,
       processedData.kickstarter.length > 0 ? `${processedData.kickstarter.length} Kickstarter` : null,
       processedData.newsletters.length > 0 ? `${processedData.newsletters.length} newsletters` : null,
       processedData.marketing.length > 0 ? `${processedData.marketing.length} marketing` : null,

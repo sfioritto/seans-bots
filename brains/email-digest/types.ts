@@ -91,6 +91,15 @@ export interface NotificationEmail {
   summary: string;
 }
 
+// Investment emails (portfolio updates, dividends, statements, etc.)
+export interface InvestmentEmail {
+  emailId: string;
+  rawEmail: RawEmail;
+  category: 'portfolio_update' | 'dividend' | 'trade_confirmation' | 'statement' | 'tax_document' | 'prospectus' | 'shareholder_notice' | 'performance_report' | 'other';
+  source: string;
+  summary: string;
+}
+
 // Processed results by category
 export interface ProcessedEmails {
   isaac: IsaacEmail[];
@@ -100,5 +109,6 @@ export interface ProcessedEmails {
   newsletters: NewsletterEmail[];
   marketing: MarketingEmail[];
   notifications: NotificationEmail[];
+  investments: InvestmentEmail[];
   actionItemsMap: ActionItemsMap;  // Action items keyed by email ID
 }
