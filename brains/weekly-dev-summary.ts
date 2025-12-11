@@ -1,7 +1,10 @@
 import { brain } from '../brain.js';
 import { developerSummaryPrompt } from '../prompts/weekly-dev-summary/developer-summary.js';
 
-const weeklyDevSummaryBrain = brain('weekly-dev-summary')
+const weeklyDevSummaryBrain = brain({
+  title: 'weekly-dev-summary',
+  description: 'Aggregates GitHub PR activity and generates developer summaries for Slack',
+})
   .step('Initialize date range', ({ state }) => {
     const now = new Date();
     const weekStart = new Date(now);

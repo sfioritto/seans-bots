@@ -12,7 +12,10 @@ import * as notifications from './email-digest/processors/notifications.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
 import type { ProcessedEmails, RawEmail } from './email-digest/types.js';
 
-const emailDigestBrain = brain('email-digest')
+const emailDigestBrain = brain({
+  title: 'email-digest',
+  description: 'Categorizes inbox emails across accounts into Isaac, Amazon, billing, investments, Kickstarter, newsletters, marketing, and notifications with action item extraction',
+})
   // Step 1: Fetch ALL inbox emails from ALL accounts
   .step('Fetch all inbox emails from all accounts', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();

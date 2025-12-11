@@ -48,7 +48,10 @@ const receiptMatchingSchema = z.object({
   ),
 });
 
-const mercuryReceiptsBrain = brain('mercury-receipts')
+const mercuryReceiptsBrain = brain({
+  title: 'mercury-receipts',
+  description: 'Matches Mercury bank receipt requests to emails and forwards them automatically',
+})
   // Step 1: Search inbox for Mercury receipt request emails
   .step('Search for Mercury receipt requests', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();

@@ -3,7 +3,10 @@ import { aiRelatedPostsPrompt } from '../prompts/hn-weekly-post/ai-related-posts
 import { generateWeeklyPostPrompt } from '../prompts/hn-weekly-post/generate-weekly-post.js';
 import { slackWebhook } from '../webhooks/slack.js';
 
-const hnWeeklyPostBrain = brain('hn-weekly-post')
+const hnWeeklyPostBrain = brain({
+  title: 'hn-weekly-post',
+  description: 'Curates AI-related Hacker News stories and posts a weekly summary to Slack with feedback loop',
+})
   .step('Fetch HN stories from last week', async ({ state }) => {
     // Get the timestamp for one week ago (Algolia uses seconds)
     const oneWeekAgo = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
