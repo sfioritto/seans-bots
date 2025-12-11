@@ -7,7 +7,9 @@
       "Bash(cat:*)",
       "WebSearch",
       "WebFetch(domain:developers.google.com)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "WebFetch(domain:docs.mercury.com)",
+      "WebFetch(domain:pypi.org)"
     ],
     "deny": [],
     "ask": []
