@@ -20,6 +20,7 @@ const emailDigestBrain = brain({
   .step('Fetch all inbox emails from all accounts', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();
 
+
     if (accounts.length === 0) {
       console.log('No Gmail accounts configured');
       return {
@@ -415,9 +416,10 @@ const emailDigestBrain = brain({
     const html = generateUnifiedPage(processedData, sessionId, webhookUrl);
     await pages.update(slug, html);
 
-    console.log(`Summary page created: ${page.url}`);
+    const pageUrl = `${env.origin}/pages/${slug}`;
+    console.log(`Summary page created: ${pageUrl}`);
 
-    return { ...state, sessionId, pageUrl: page.url };
+    return { ...state, sessionId, pageUrl };
   })
 
   // Step 11: Send notification
