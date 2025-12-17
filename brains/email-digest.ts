@@ -372,7 +372,7 @@ const emailDigestBrain = brain({
   })
 
   // Step 10: Generate unified HTML page
-  .step('Generate unified summary page', async ({ state, pages }) => {
+  .step('Generate unified summary page', async ({ state, pages, env }) => {
     const processedData: ProcessedEmails = {
       isaac: state.processedIsaac as any[],
       amazon: state.processedAmazon as any[],
@@ -410,8 +410,7 @@ const emailDigestBrain = brain({
     const tempHtml = '<html><body>Loading...</body></html>';
     const page = await pages.create(slug, tempHtml, { persist: false });
 
-    const baseUrl = page.url.replace(`/pages/${slug}`, '');
-    const webhookUrl = `${baseUrl}/webhooks/archive`;
+    const webhookUrl = `${env.origin}/webhooks/archive`;
 
     const html = generateUnifiedPage(processedData, sessionId, webhookUrl);
     await pages.update(slug, html);
