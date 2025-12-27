@@ -4,66 +4,14 @@ import { slackWebhook } from '../webhooks/slack.js';
 
 const SEAN_SLACK_ID = 'UDFFLKPM5';
 
-// Helper to send a Slack message
-async function sendSlackMessage(
-  token: string,
-  channel: string,
-  text: string,
-  threadTs?: string
-): Promise<{ ts: string; channel: string }> {
-  const response = await fetch('https://slack.com/api/chat.postMessage', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      channel,
-      text,
-      ...(threadTs ? { thread_ts: threadTs } : {}),
-    }),
-  });
-
-  const result = await response.json() as { ok: boolean; ts: string; channel: string; error?: string };
-  if (!result.ok) {
-    throw new Error(`Slack API error: ${result.error}`);
-  }
-
-  return { ts: result.ts, channel: result.channel };
-}
-
-// Helper to open a DM
-async function openDM(token: string, userId: string): Promise<string> {
-  const response = await fetch('https://slack.com/api/conversations.open', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ users: userId }),
-  });
-
-  const result = await response.json() as { ok: boolean; channel: { id: string }; error?: string };
-  if (!result.ok) {
-    throw new Error(`Failed to open DM: ${result.error}`);
-  }
-
-  return result.channel.id;
-}
-
 const slackInterviewBrain = brain({
   title: 'slack-interview',
   description: 'Conducts an interview via Slack DM, gathering information to craft a story',
 })
   // Step 1: Open DM and send initial greeting
-  .step('Start interview on Slack', async ({ state }) => {
-    const slackToken = process.env.SLACK_BOT_TOKEN;
-    if (!slackToken) {
-      throw new Error('SLACK_BOT_TOKEN not set');
-    }
-
+  .step('Start interview on Slack', async ({ state, slack }) => {
     // Open DM with Sean
-    const channelId = await openDM(slackToken, SEAN_SLACK_ID);
+    const channelId = await slack.openDM(SEAN_SLACK_ID);
 
     // Send initial greeting
     const greeting = `Hey! I'm your personal storyteller bot. I'd love to interview you and turn your answers into a short story.
@@ -77,11 +25,10 @@ What would you like the story to be about? Some ideas:
 
 Just reply with what sounds interesting to you.`;
 
-    const message = await sendSlackMessage(slackToken, channelId, greeting);
+    const message = await slack.sendMessage(channelId, greeting);
 
     return {
       ...state,
-      slackToken,
       channelId,
       threadTs: message.ts,
     };
@@ -91,8 +38,8 @@ Just reply with what sounds interesting to you.`;
   // The config function runs once to set up the loop. The LLM sees the conversation
   // evolve naturally through the messages array - webhook responses are automatically
   // added as tool results by the framework.
-  .loop('Conduct interview', ({ state }) => {
-    const { slackToken, channelId, threadTs } = state;
+  .loop('Conduct interview', ({ state, slack }) => {
+    const { channelId, threadTs } = state;
 
     return {
       system: `You are conducting a friendly, engaging interview to gather material for a short story. Your goal is to draw out vivid details, emotions, and specific moments that will make for compelling storytelling.
@@ -138,7 +85,7 @@ When you have enough material for a great story (usually 4-6 exchanges with vivi
             question: z.string().describe('The interview question to ask'),
           }),
           execute: async (input: { question: string }) => {
-            await sendSlackMessage(slackToken, channelId, input.question, threadTs);
+            await slack.sendMessage(channelId, input.question, { threadTs });
             console.log(`\n🎤 Asked: ${input.question}`);
 
             return {
@@ -173,8 +120,7 @@ When you have enough material for a great story (usually 4-6 exchanges with vivi
   })
 
   // Step 3: Write the story and create a page
-  .step('Write story and create page', async ({ state, pages, env }) => {
-    const slackToken = state.slackToken as string;
+  .step('Write story and create page', async ({ state, pages, env, slack }) => {
     const channelId = state.channelId as string;
     const threadTs = state.threadTs as string;
 
@@ -295,7 +241,7 @@ ${keyMoments.map((moment, i) => `**${i + 1}.** ${moment}`).join('\n\n')}
 
     // Send the link to Slack
     const completionMessage = `✨ Your story is ready!\n\n${pageUrl}\n\nThanks for sharing with me!`;
-    await sendSlackMessage(slackToken, channelId, completionMessage, threadTs);
+    await slack.sendMessage(channelId, completionMessage, { threadTs });
 
     console.log(`\n🎉 Story page created: ${pageUrl}`);
 

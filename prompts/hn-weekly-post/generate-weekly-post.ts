@@ -5,7 +5,7 @@ interface Article {
   title: string;
   url: string;
   score: number;
-  content?: string;
+  content: string | null;
 }
 
 interface FeedbackMessage {
