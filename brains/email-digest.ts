@@ -2,10 +2,9 @@ import { z } from 'zod';
 import { brain } from '../brain.js';
 import { archiveWebhook } from '../webhooks/archive.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
-import type { ProcessedEmails, RawEmail } from './email-digest/types.js';
+import type { ProcessedEmails, RawEmail, ChildrenEmailInfo, BillingEmailInfo } from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';
 
-// Category definitions for the AI prompt
 // Helper for retry with exponential backoff
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -27,50 +26,80 @@ async function withRetry<T>(
       }
 
       const delay = baseDelayMs * Math.pow(2, attempt);
-      console.log(`Rate limited, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
   throw lastError;
 }
 
-const CATEGORY_DESCRIPTIONS = `
-Categories:
-- isaac: Emails about Isaac (son) - school, rock climbing, summer camps, choir, health, activities
-- amazon: Amazon orders, shipping, deliveries, returns, billing
-- billing: Bills, receipts, invoices, subscriptions, bank statements, payment confirmations
-- investments: Investment accounts, portfolio updates, dividends, trade confirmations, statements
-- kickstarter: Kickstarter, Indiegogo, crowdfunding project updates
-- newsletters: Newsletter subscriptions, periodic digests
-- marketing: Marketing emails, promotions, sales, ads
-- notifications: Low-value system notifications, product updates, policy changes, announcements
-`;
-
-// Schema for categorization result
+// Schema for categorization - returns exactly ONE category
 const categorySchema = z.object({
-  categories: z.array(z.enum([
-    'isaac', 'amazon', 'billing', 'investments',
+  category: z.enum([
+    'children', 'amazon', 'billing', 'investments',
     'kickstarter', 'newsletters', 'marketing', 'notifications'
-  ])),
+  ]),
+});
+
+// Schema for children email enrichment
+const childrenEnrichmentSchema = z.object({
+  summary: z.string().describe('One sentence summary of what this email is about'),
+  actionItem: z.string().nullable().describe('If there is something the parent needs to do, describe it briefly. Otherwise null.'),
+});
+
+// Schema for billing email enrichment
+const billingEnrichmentSchema = z.object({
+  description: z.string().describe('Brief description of what this bill/payment is for'),
+  amount: z.string().nullable().describe('The dollar amount if visible in the email (e.g. "$49.99"). Otherwise null.'),
 });
 
 function buildCategorizationPrompt(email: RawEmail): string {
-  return `Categorize this email into one or more categories.
+  return `Categorize this email into exactly ONE category. Choose the BEST fit.
 
 From: ${email.from}
 Subject: ${email.subject}
-Body: ${email.body.substring(0, 2000)}
+Body: ${email.body.substring(0, 1500)}
 
-${CATEGORY_DESCRIPTIONS}
+Categories (pick ONE):
+- children: Emails about kids (school, activities, camps, health, sports, choir, etc.)
+- amazon: Amazon orders, shipping, deliveries, returns
+- billing: Bills, receipts, invoices, subscriptions, bank statements, payment confirmations
+- investments: Investment accounts, portfolio updates, dividends, trade confirmations
+- kickstarter: Kickstarter, Indiegogo, crowdfunding updates
+- newsletters: Newsletter subscriptions, periodic digests
+- marketing: Marketing emails, promotions, sales, ads
+- notifications: System notifications, product updates, policy changes, announcements
 
-Return the categories this email belongs to. An email can belong to multiple categories if appropriate.`;
+Think about what this email is PRIMARILY about, then choose the single best category.`;
+}
+
+function buildChildrenEnrichmentPrompt(email: RawEmail): string {
+  return `Analyze this email about children/kids activities.
+
+From: ${email.from}
+Subject: ${email.subject}
+Body: ${email.body.substring(0, 1500)}
+
+Provide:
+1. A one-sentence summary of what this email is about
+2. If there's an action item the parent needs to do (sign up, pay, respond, bring something, etc.), describe it. If no action needed, return null.`;
+}
+
+function buildBillingEnrichmentPrompt(email: RawEmail): string {
+  return `Analyze this billing/payment email.
+
+From: ${email.from}
+Subject: ${email.subject}
+Body: ${email.body.substring(0, 1500)}
+
+Provide:
+1. Brief description of what this bill or payment is for
+2. The dollar amount if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.`;
 }
 
 const emailDigestBrain = brain({
   title: 'email-digest',
-  description: 'Categorizes inbox emails across accounts into Isaac, Amazon, billing, investments, Kickstarter, newsletters, marketing, and notifications',
+  description: 'Categorizes inbox emails and extracts key info like action items and bill amounts',
 })
-  // Step 0: Run Mercury receipts brain first
   .brain(
     'Process Mercury receipt requests',
     mercuryReceiptsBrain,
@@ -82,18 +111,13 @@ const emailDigestBrain = brain({
     () => ({})
   )
 
-  // Step 1: Fetch ALL inbox emails from ALL accounts
   .step('Fetch all inbox emails from all accounts', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();
-
-    console.log(`Fetching emails from ${accounts.length} accounts...`);
-
     const emailsById: Record<string, RawEmail> = {};
     const query = 'label:inbox';
 
     for (const account of accounts) {
       const messages = await gmail.searchMessages(account.refreshToken, query, 100);
-      console.log(`Found ${messages.length} emails in ${account.name}`);
 
       for (const message of messages) {
         const details = await gmail.getMessageDetails(account.refreshToken, message.id);
@@ -110,21 +134,13 @@ const emailDigestBrain = brain({
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
-      // Small delay between accounts to avoid rate limiting
       await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-
-    const emailCount = Object.keys(emailsById).length;
-    if (emailCount === 0) {
-      console.log('No inbox emails found across all accounts');
-    } else {
-      console.log(`Found ${emailCount} total inbox emails across ${accounts.length} accounts`);
     }
 
     return {
       ...state,
-      emailsById: emailsById as any,
-      isaac: [] as string[],
+      emailsById,
+      children: [] as string[],
       amazon: [] as string[],
       billing: [] as string[],
       investments: [] as string[],
@@ -132,23 +148,21 @@ const emailDigestBrain = brain({
       newsletters: [] as string[],
       marketing: [] as string[],
       notifications: [] as string[],
-    };
+      childrenInfo: {} as Record<string, ChildrenEmailInfo>,
+      billingInfo: {} as Record<string, BillingEmailInfo>,
+    } as any;
   })
 
-  // Step 2: Categorize all emails
   .step('Categorize all emails', async ({ state, client }) => {
     const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
     const emailEntries = Object.entries(emailsById);
 
     if (emailEntries.length === 0) {
-      console.log('No emails to categorize');
       return state;
     }
 
-    console.log(`Categorizing ${emailEntries.length} emails...`);
-
     const categories: Record<string, string[]> = {
-      isaac: [],
+      children: [],
       amazon: [],
       billing: [],
       investments: [],
@@ -158,74 +172,101 @@ const emailDigestBrain = brain({
       notifications: [],
     };
 
-    const BATCH_SIZE = 20; // Aggressive batching, backoff handles rate limits
+    const BATCH_SIZE = 20;
 
-    // Process in batches
     for (let i = 0; i < emailEntries.length; i += BATCH_SIZE) {
       const batch = emailEntries.slice(i, i + BATCH_SIZE);
 
-      // Fire off all requests in the batch with small delays between sends
       const promises = batch.map(async ([id, email], idx) => {
-        // Small stagger to spread out initial requests
         await new Promise((resolve) => setTimeout(resolve, idx * 30));
         const result = await withRetry(() =>
           client.generateObject({
             prompt: buildCategorizationPrompt(email),
             schema: categorySchema,
-            schemaName: 'emailCategories',
+            schemaName: 'emailCategory',
           })
         );
-        return { id, categories: result.categories };
+        return { id, category: result.category };
       });
 
-      // Wait for all in batch to complete
       const results = await Promise.all(promises);
 
-      // Process results
-      for (const { id, categories: cats } of results) {
-        for (const cat of cats) {
-          if (categories[cat]) {
-            categories[cat].push(id);
-          }
+      for (const { id, category } of results) {
+        if (categories[category]) {
+          categories[category].push(id);
         }
       }
-
-      console.log(`Processed batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(emailEntries.length / BATCH_SIZE)}`);
     }
-
-    console.log(`Categorization complete:`);
-    console.log(`  Isaac: ${categories.isaac.length}`);
-    console.log(`  Amazon: ${categories.amazon.length}`);
-    console.log(`  Billing: ${categories.billing.length}`);
-    console.log(`  Investments: ${categories.investments.length}`);
-    console.log(`  Kickstarter: ${categories.kickstarter.length}`);
-    console.log(`  Newsletters: ${categories.newsletters.length}`);
-    console.log(`  Marketing: ${categories.marketing.length}`);
-    console.log(`  Notifications: ${categories.notifications.length}`);
 
     return {
       ...state,
-      cool: 'news',
       ...categories,
-    };
+    } as any;
   })
 
-  // Step 3: Generate unified HTML page
+  .step('Enrich children and billing emails', async ({ state, client }) => {
+    const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
+    const childrenIds = state.children as unknown as string[];
+    const billingIds = state.billing as unknown as string[];
+
+    const childrenInfo: Record<string, ChildrenEmailInfo> = {};
+    const billingInfo: Record<string, BillingEmailInfo> = {};
+
+    // Enrich children emails
+    for (const id of childrenIds) {
+      const email = emailsById[id];
+      if (!email) continue;
+
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildChildrenEnrichmentPrompt(email),
+          schema: childrenEnrichmentSchema,
+          schemaName: 'childrenEmailInfo',
+        })
+      );
+      childrenInfo[id] = result;
+    }
+
+    // Enrich billing emails
+    for (const id of billingIds) {
+      const email = emailsById[id];
+      if (!email) continue;
+
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildBillingEnrichmentPrompt(email),
+          schema: billingEnrichmentSchema,
+          schemaName: 'billingEmailInfo',
+        })
+      );
+      billingInfo[id] = result;
+    }
+
+    return {
+      ...state,
+      childrenInfo,
+      billingInfo,
+    } as any;
+  })
+
   .step('Generate unified summary page', async ({ state, pages, env }) => {
+    const s = state as any;
     const processedData: ProcessedEmails = {
-      emailsById: state.emailsById,
-      isaac: state.isaac as unknown as string[],
-      amazon: state.amazon as unknown as string[],
-      billing: state.billing as unknown as string[],
-      investments: state.investments as unknown as string[],
-      kickstarter: state.kickstarter as unknown as string[],
-      newsletters: state.newsletters as unknown as string[],
-      marketing: state.marketing as unknown as string[],
-      notifications: state.notifications as unknown as string[],
+      emailsById: s.emailsById,
+      children: s.children as string[],
+      amazon: s.amazon as string[],
+      billing: s.billing as string[],
+      investments: s.investments as string[],
+      kickstarter: s.kickstarter as string[],
+      newsletters: s.newsletters as string[],
+      marketing: s.marketing as string[],
+      notifications: s.notifications as string[],
+      childrenInfo: s.childrenInfo as Record<string, ChildrenEmailInfo>,
+      billingInfo: s.billingInfo as Record<string, BillingEmailInfo>,
     };
 
     const totalEmails =
-      processedData.isaac.length +
+      processedData.children.length +
       processedData.amazon.length +
       processedData.billing.length +
       processedData.investments.length +
@@ -235,7 +276,6 @@ const emailDigestBrain = brain({
       processedData.notifications.length;
 
     if (totalEmails === 0) {
-      console.log('No categorized emails to display');
       return { ...state, sessionId: '', pageUrl: '' };
     }
 
@@ -247,37 +287,32 @@ const emailDigestBrain = brain({
     const slug = `email-digest-${sessionId.slice(0, 8)}`;
 
     const tempHtml = '<html><body>Loading...</body></html>';
-    const page = await pages.create(slug, tempHtml, { persist: false });
+    await pages.create(slug, tempHtml, { persist: false });
 
     const webhookUrl = `${env.origin}/webhooks/archive`;
 
     const html = generateUnifiedPage(processedData, sessionId, webhookUrl);
     await pages.update(slug, html);
 
-    const pageUrl = `${env.origin}/pages/${slug}`;
-    console.log(`Summary page created: ${pageUrl}`);
-
-    return { ...state, sessionId, pageUrl };
+    return { ...state, sessionId, pageUrl: `${env.origin}/pages/${slug}` } as any;
   })
 
-  // Step 4: Send notification
   .step('Send notification', async ({ state, ntfy }) => {
-    if (!state.pageUrl) {
-      console.log('No page created, skipping notification');
+    if (!(state as any).pageUrl) {
       return state;
     }
 
-    const isaac = state.isaac as unknown as string[];
-    const amazon = state.amazon as unknown as string[];
-    const billing = state.billing as unknown as string[];
-    const investments = state.investments as unknown as string[];
-    const kickstarter = state.kickstarter as unknown as string[];
-    const newsletters = state.newsletters as unknown as string[];
-    const marketing = state.marketing as unknown as string[];
-    const notifications = state.notifications as unknown as string[];
+    const children = (state as any).children as string[];
+    const amazon = (state as any).amazon as string[];
+    const billing = (state as any).billing as string[];
+    const investments = (state as any).investments as string[];
+    const kickstarter = (state as any).kickstarter as string[];
+    const newsletters = (state as any).newsletters as string[];
+    const marketing = (state as any).marketing as string[];
+    const notifications = (state as any).notifications as string[];
 
     const counts = [
-      isaac.length > 0 ? `${isaac.length} Isaac` : null,
+      children.length > 0 ? `${children.length} children` : null,
       amazon.length > 0 ? `${amazon.length} Amazon` : null,
       billing.length > 0 ? `${billing.length} billing` : null,
       investments.length > 0 ? `${investments.length} investments` : null,
@@ -288,23 +323,17 @@ const emailDigestBrain = brain({
     ].filter(Boolean);
 
     const message = `Email digest: ${counts.join(', ')}`;
-
-    await ntfy.send(message, state.pageUrl as string);
-    console.log(`Notification sent: ${message}`);
+    await ntfy.send(message, (state as any).pageUrl as string);
 
     return state;
   })
 
-  // Step 5: Wait for archive confirmation
   .step('Wait for archive confirmation', ({ state }) => {
-    if (!state.sessionId) {
-      console.log('No session, completing without waiting');
+    if (!(state as any).sessionId) {
       return state;
     }
 
-    const sessionId = state.sessionId as string;
-    console.log(`Waiting for user confirmation with sessionId: ${sessionId}`);
-
+    const sessionId = (state as any).sessionId as string;
     const webhook = archiveWebhook(sessionId);
 
     return {
@@ -313,26 +342,20 @@ const emailDigestBrain = brain({
     };
   })
 
-  // Step 6: Archive selected emails (handles multiple accounts)
   .step('Archive emails', async ({ state, response, gmail }) => {
-    if (!state.sessionId) {
-      console.log('No emails to archive');
+    if (!(state as any).sessionId) {
       return { ...state, archived: false, archivedCount: 0 };
     }
 
     const webhookResponse = response as { emailIds: string[]; confirmed: boolean } | undefined;
 
     if (!webhookResponse?.confirmed) {
-      console.log('Archive not confirmed');
       return { ...state, archived: false, archivedCount: 0 };
     }
 
     const selectedEmailIds = new Set(webhookResponse.emailIds);
-    const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
+    const emailsById = (state as any).emailsById as Record<string, RawEmail>;
 
-    console.log(`Archiving ${selectedEmailIds.size} emails...`);
-
-    // Group emails by account (refreshToken)
     const emailsByAccount: Record<string, { refreshToken: string; emailIds: string[] }> = {};
 
     for (const emailId of selectedEmailIds) {
@@ -347,13 +370,10 @@ const emailDigestBrain = brain({
     }
 
     let totalArchived = 0;
-    for (const [accountName, { refreshToken, emailIds }] of Object.entries(emailsByAccount)) {
-      console.log(`Archiving ${emailIds.length} emails from ${accountName}...`);
+    for (const [, { refreshToken, emailIds }] of Object.entries(emailsByAccount)) {
       await gmail.archiveMessages(refreshToken, emailIds);
       totalArchived += emailIds.length;
     }
-
-    console.log(`Successfully archived ${totalArchived} emails across ${Object.keys(emailsByAccount).length} accounts`);
 
     return {
       ...state,

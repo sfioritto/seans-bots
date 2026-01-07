@@ -11,10 +11,21 @@ export interface RawEmail {
   refreshToken: string;
 }
 
-// Categories are just arrays of email IDs
+// Enrichment data for specific categories
+export interface ChildrenEmailInfo {
+  summary: string;
+  actionItem: string | null;
+}
+
+export interface BillingEmailInfo {
+  description: string;
+  amount: string | null;
+}
+
+// Categories are arrays of email IDs, with optional enrichment data
 export interface ProcessedEmails {
   emailsById: Record<string, RawEmail>;
-  isaac: string[];
+  children: string[];
   amazon: string[];
   billing: string[];
   investments: string[];
@@ -22,4 +33,7 @@ export interface ProcessedEmails {
   newsletters: string[];
   marketing: string[];
   notifications: string[];
+  // Enrichment data keyed by email ID
+  childrenInfo: Record<string, ChildrenEmailInfo>;
+  billingInfo: Record<string, BillingEmailInfo>;
 }

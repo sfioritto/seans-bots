@@ -1,4 +1,4 @@
-import type { ProcessedEmails, RawEmail } from '../types.js';
+import type { ProcessedEmails, RawEmail, ChildrenEmailInfo, BillingEmailInfo } from '../types.js';
 
 interface CategoryConfig {
   id: string;
@@ -8,7 +8,7 @@ interface CategoryConfig {
 }
 
 const categories: CategoryConfig[] = [
-  { id: 'isaac', label: 'Isaac', color: '#ef4444', borderColor: '#dc2626' },
+  { id: 'children', label: 'Children', color: '#ef4444', borderColor: '#dc2626' },
   { id: 'amazon', label: 'Amazon', color: '#ff9900', borderColor: '#e88b00' },
   { id: 'billing', label: 'Billing', color: '#059669', borderColor: '#047857' },
   { id: 'investments', label: 'Investments', color: '#0891b2', borderColor: '#0e7490' },
@@ -38,6 +38,63 @@ function renderEmailList(emailIds: string[], emailsById: Record<string, RawEmail
   }).join('');
 }
 
+function renderChildrenEmailList(
+  emailIds: string[],
+  emailsById: Record<string, RawEmail>,
+  childrenInfo: Record<string, ChildrenEmailInfo>
+): string {
+  return emailIds.map(emailId => {
+    const email = emailsById[emailId];
+    if (!email) return '';
+
+    const info = childrenInfo[emailId];
+    const hasAction = info?.actionItem;
+
+    return `
+      <div class="email-item ${hasAction ? 'has-action' : ''}">
+        <label class="checkbox-label">
+          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(email.subject)}</span>
+            <span class="email-from">${escapeHtml(email.from)}</span>
+            ${info ? `<span class="email-summary">${escapeHtml(info.summary)}</span>` : ''}
+            ${hasAction ? `<span class="action-item">Action: ${escapeHtml(info.actionItem!)}</span>` : ''}
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderBillingEmailList(
+  emailIds: string[],
+  emailsById: Record<string, RawEmail>,
+  billingInfo: Record<string, BillingEmailInfo>
+): string {
+  return emailIds.map(emailId => {
+    const email = emailsById[emailId];
+    if (!email) return '';
+
+    const info = billingInfo[emailId];
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <div class="email-content">
+            <div class="billing-header">
+              <span class="email-subject">${escapeHtml(email.subject)}</span>
+              ${info?.amount ? `<span class="billing-amount">${escapeHtml(info.amount)}</span>` : ''}
+            </div>
+            <span class="email-from">${escapeHtml(email.from)}</span>
+            ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(email.snippet)}</span>`}
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -53,7 +110,7 @@ export function generateUnifiedPage(
   webhookUrl: string
 ): string {
   const counts = {
-    isaac: processed.isaac.length,
+    children: processed.children.length,
     amazon: processed.amazon.length,
     billing: processed.billing.length,
     investments: processed.investments.length,
@@ -65,9 +122,8 @@ export function generateUnifiedPage(
 
   const totalEmails = Object.values(counts).reduce((a, b) => a + b, 0);
 
-  // Collect all email IDs
   const allEmailIds = [
-    ...processed.isaac,
+    ...processed.children,
     ...processed.amazon,
     ...processed.billing,
     ...processed.investments,
@@ -77,9 +133,8 @@ export function generateUnifiedPage(
     ...processed.notifications,
   ];
 
-  // Build tabs for categories with emails
   const activeTabs = categories.filter(cat => counts[cat.id as keyof typeof counts] > 0);
-  const firstActiveTab = activeTabs[0]?.id || 'isaac';
+  const firstActiveTab = activeTabs[0]?.id || 'children';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -170,6 +225,10 @@ export function generateUnifiedPage(
       margin-bottom: 10px;
       background: #f9fafb;
     }
+    .email-item.has-action {
+      border-left: 4px solid #ef4444;
+      background: #fef2f2;
+    }
     .checkbox-label {
       display: flex;
       align-items: flex-start;
@@ -200,6 +259,29 @@ export function generateUnifiedPage(
       color: #9ca3af;
       font-size: 0.85em;
       line-height: 1.4;
+    }
+    .email-summary {
+      color: #4b5563;
+      font-size: 0.9em;
+      line-height: 1.4;
+    }
+    .action-item {
+      color: #dc2626;
+      font-weight: 600;
+      font-size: 0.9em;
+      margin-top: 4px;
+    }
+    .billing-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .billing-amount {
+      font-weight: 700;
+      color: #059669;
+      font-size: 1.1em;
+      white-space: nowrap;
     }
     .archive-form {
       margin-top: 30px;
@@ -250,15 +332,15 @@ export function generateUnifiedPage(
     <input type="hidden" name="sessionId" value="${sessionId}">
     <input type="hidden" name="allEmailIds" value='${JSON.stringify(allEmailIds)}'>
 
-    ${counts.isaac > 0 ? `
-      <div id="isaac" class="tab-content ${firstActiveTab === 'isaac' ? 'active' : ''}">
+    ${counts.children > 0 ? `
+      <div id="children" class="tab-content ${firstActiveTab === 'children' ? 'active' : ''}">
         <div class="select-all-container">
           <label>
-            <input type="checkbox" class="select-all-tab" data-tab="isaac" checked>
-            Select All Isaac
+            <input type="checkbox" class="select-all-tab" data-tab="children" checked>
+            Select All Children
           </label>
         </div>
-        ${renderEmailList(processed.isaac, processed.emailsById)}
+        ${renderChildrenEmailList(processed.children, processed.emailsById, processed.childrenInfo)}
       </div>
     ` : ''}
 
@@ -282,7 +364,7 @@ export function generateUnifiedPage(
             Select All Billing
           </label>
         </div>
-        ${renderEmailList(processed.billing, processed.emailsById)}
+        ${renderBillingEmailList(processed.billing, processed.emailsById, processed.billingInfo)}
       </div>
     ` : ''}
 
@@ -354,7 +436,6 @@ export function generateUnifiedPage(
   </form>
 
   <script>
-    // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', () => {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -364,7 +445,6 @@ export function generateUnifiedPage(
       });
     });
 
-    // Select all per tab
     document.querySelectorAll('.select-all-tab').forEach(checkbox => {
       checkbox.addEventListener('change', function() {
         const tabId = this.dataset.tab;
@@ -374,7 +454,6 @@ export function generateUnifiedPage(
       });
     });
 
-    // Update tab select-all when individual checkboxes change
     document.querySelectorAll('input[name="emailIds"]').forEach(cb => {
       cb.addEventListener('change', function() {
         const tabContent = this.closest('.tab-content');
@@ -396,7 +475,6 @@ export function generateUnifiedPage(
       document.querySelectorAll('.select-all-tab').forEach(cb => cb.checked = false);
     }
 
-    // Handle form submission
     document.querySelector('form').addEventListener('submit', function(e) {
       const checkedIds = Array.from(document.querySelectorAll('input[name="emailIds"]:checked'))
         .map(cb => cb.value);
