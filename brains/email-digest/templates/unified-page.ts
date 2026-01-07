@@ -1,9 +1,4 @@
-import type { ProcessedEmails, ActionItem, IsaacEmail } from '../types.js';
-import { categoryLabels as amazonCategoryLabels } from '../processors/amazon.js';
-import { categoryLabels as isaacCategoryLabels } from '../processors/isaac.js';
-import { categoryLabels as billingCategoryLabels } from '../processors/billing.js';
-import { categoryLabels as investmentCategoryLabels } from '../processors/investments.js';
-import { countActionItems } from '../processors/action-items.js';
+import type { ProcessedEmails, RawEmail } from '../types.js';
 
 interface CategoryConfig {
   id: string;
@@ -23,245 +18,33 @@ const categories: CategoryConfig[] = [
   { id: 'notifications', label: 'Notifications', color: '#8b5cf6', borderColor: '#7c3aed' },
 ];
 
-// Helper to render action items inline under an email
-function renderInlineActionItems(actionItems: ActionItem[] | undefined): string {
-  if (!actionItems || actionItems.length === 0) return '';
+function renderEmailList(emailIds: string[], emailsById: Record<string, RawEmail>): string {
+  return emailIds.map(emailId => {
+    const email = emailsById[emailId];
+    if (!email) return '';
 
-  return `
-    <ul class="action-list">
-      ${actionItems.map(item => `
-        <li class="action-item">
-          <strong>${item.description}</strong>
-          ${item.context ? `<span class="context">${item.context}</span>` : ''}
-          ${item.link ? `<a href="${item.link}" target="_blank" class="action-link">Complete action</a>` : ''}
-          ${item.steps.length > 0 ? `
-            <ol class="action-steps">
-              ${item.steps.map(step => `<li>${step}</li>`).join('')}
-            </ol>
-          ` : ''}
-        </li>
-      `).join('')}
-    </ul>
-  `;
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(email.subject)}</span>
+            <span class="email-from">${escapeHtml(email.from)}</span>
+            <span class="email-snippet">${escapeHtml(email.snippet)}</span>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
 }
 
-// Helper to render Isaac action items (they have a slightly different structure)
-function renderIsaacActionItems(actionItems: IsaacEmail['actionItems']): string {
-  if (!actionItems || actionItems.length === 0) return '';
-
-  return `
-    <ul class="action-list">
-      ${actionItems.map(item => `
-        <li class="action-item">
-          <strong>${item.description}</strong>
-          ${item.context ? `<span class="context">${item.context}</span>` : ''}
-          ${item.link ? `<a href="${item.link}" target="_blank" class="action-link">Complete action</a>` : ''}
-          ${item.steps.length > 0 ? `
-            <ol class="action-steps">
-              ${item.steps.map(step => `<li>${step}</li>`).join('')}
-            </ol>
-          ` : ''}
-        </li>
-      `).join('')}
-    </ul>
-  `;
-}
-
-function renderIsaacSection(processed: ProcessedEmails): string {
-  if (processed.isaac.length === 0) return '';
-
-  // Group by category
-  const byCategory: Record<string, typeof processed.isaac> = {};
-  for (const email of processed.isaac) {
-    if (!byCategory[email.category]) byCategory[email.category] = [];
-    byCategory[email.category].push(email);
-  }
-
-  return Object.entries(byCategory).map(([category, emails]) => `
-    <div class="subcategory">
-      <h3>${isaacCategoryLabels[category] || category}</h3>
-      ${emails.map(email => `
-        <div class="email-item ${email.actionItems.length > 0 ? 'has-action-items' : ''}">
-          <label class="checkbox-label">
-            <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-            <div class="email-content">
-              <span class="email-subject">${email.rawEmail.subject}</span>
-              <span class="summary">${email.summary}</span>
-              ${renderIsaacActionItems(email.actionItems)}
-            </div>
-          </label>
-        </div>
-      `).join('')}
-    </div>
-  `).join('');
-}
-
-function renderAmazonSection(processed: ProcessedEmails): string {
-  if (processed.amazon.length === 0) return '';
-
-  // Group by category
-  const byCategory: Record<string, typeof processed.amazon> = {};
-  for (const email of processed.amazon) {
-    if (!byCategory[email.category]) byCategory[email.category] = [];
-    byCategory[email.category].push(email);
-  }
-
-  return Object.entries(byCategory).map(([category, emails]) => `
-    <div class="subcategory">
-      <h3>${amazonCategoryLabels[category] || category}</h3>
-      ${emails.map(email => `
-        <div class="email-item">
-          <label class="checkbox-label">
-            <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-            <div class="email-content">
-              <span class="summary">${email.summary}</span>
-              ${renderInlineActionItems(processed.actionItemsMap[email.emailId])}
-            </div>
-          </label>
-        </div>
-      `).join('')}
-    </div>
-  `).join('');
-}
-
-function renderBillingSection(processed: ProcessedEmails): string {
-  if (processed.billing.length === 0) return '';
-
-  // Group by category
-  const byCategory: Record<string, typeof processed.billing> = {};
-  for (const email of processed.billing) {
-    if (!byCategory[email.category]) byCategory[email.category] = [];
-    byCategory[email.category].push(email);
-  }
-
-  return Object.entries(byCategory).map(([category, emails]) => `
-    <div class="subcategory">
-      <h3>${billingCategoryLabels[category] || category}</h3>
-      ${emails.map(email => `
-        <div class="email-item">
-          <label class="checkbox-label">
-            <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-            <div class="billing-content">
-              <span class="source-name">${email.source}</span>
-              <span class="summary">${email.summary}</span>
-              ${email.amounts.length > 0 ? `
-                <ul class="amounts">
-                  ${email.amounts.map(amount => `
-                    <li><span class="amount-desc">${amount.description}</span><span class="amount-value">${amount.amount}</span></li>
-                  `).join('')}
-                </ul>
-              ` : ''}
-              ${renderInlineActionItems(processed.actionItemsMap[email.emailId])}
-            </div>
-          </label>
-        </div>
-      `).join('')}
-    </div>
-  `).join('');
-}
-
-function renderInvestmentsSection(processed: ProcessedEmails): string {
-  if (processed.investments.length === 0) return '';
-
-  // Group by category
-  const byCategory: Record<string, typeof processed.investments> = {};
-  for (const email of processed.investments) {
-    if (!byCategory[email.category]) byCategory[email.category] = [];
-    byCategory[email.category].push(email);
-  }
-
-  return Object.entries(byCategory).map(([category, emails]) => `
-    <div class="subcategory">
-      <h3>${investmentCategoryLabels[category] || category}</h3>
-      ${emails.map(email => `
-        <div class="email-item">
-          <label class="checkbox-label">
-            <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-            <div class="investment-content">
-              <span class="source-name">${email.source}</span>
-              <span class="summary">${email.summary}</span>
-              ${renderInlineActionItems(processed.actionItemsMap[email.emailId])}
-            </div>
-          </label>
-        </div>
-      `).join('')}
-    </div>
-  `).join('');
-}
-
-function renderKickstarterSection(processed: ProcessedEmails): string {
-  if (processed.kickstarter.length === 0) return '';
-
-  return processed.kickstarter.map(email => `
-    <div class="email-item">
-      <label class="checkbox-label">
-        <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-        <div class="kickstarter-content">
-          <span class="summary">${email.summary}</span>
-          ${email.actionItems.length > 0 ? `
-            <ul class="kickstarter-actions">
-              ${email.actionItems.map(action => `<li>${action}</li>`).join('')}
-            </ul>
-          ` : ''}
-          ${renderInlineActionItems(processed.actionItemsMap[email.emailId])}
-        </div>
-      </label>
-    </div>
-  `).join('');
-}
-
-function renderNewslettersSection(processed: ProcessedEmails): string {
-  if (processed.newsletters.length === 0) return '';
-
-  return processed.newsletters.map(email => `
-    <div class="email-item">
-      <label class="checkbox-label">
-        <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-        <div class="newsletter-content">
-          <span class="newsletter-name">${email.newsletterName}</span>
-          <span class="summary">${email.summary}</span>
-          ${email.deadlines.length > 0 ? `
-            <ul class="deadlines">
-              ${email.deadlines.map(deadline => `<li>${deadline}</li>`).join('')}
-            </ul>
-          ` : ''}
-          ${renderInlineActionItems(processed.actionItemsMap[email.emailId])}
-        </div>
-      </label>
-    </div>
-  `).join('');
-}
-
-function renderMarketingSection(processed: ProcessedEmails): string {
-  if (processed.marketing.length === 0) return '';
-
-  return processed.marketing.map(email => `
-    <div class="email-item">
-      <label class="checkbox-label">
-        <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-        <div class="marketing-content">
-          <span class="brand-name">${email.brand}</span>
-          <span class="summary">${email.summary}</span>
-        </div>
-      </label>
-    </div>
-  `).join('');
-}
-
-function renderNotificationsSection(processed: ProcessedEmails): string {
-  if (processed.notifications.length === 0) return '';
-
-  return processed.notifications.map(email => `
-    <div class="email-item">
-      <label class="checkbox-label">
-        <input type="checkbox" name="emailIds" value="${email.emailId}" checked>
-        <div class="notification-content">
-          <span class="source-name">${email.source}</span>
-          <span class="summary">${email.summary}</span>
-        </div>
-      </label>
-    </div>
-  `).join('');
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 export function generateUnifiedPage(
@@ -281,21 +64,17 @@ export function generateUnifiedPage(
   };
 
   const totalEmails = Object.values(counts).reduce((a, b) => a + b, 0);
-  // Count action items from both the map and Isaac emails
-  const actionItemsFromMap = countActionItems(processed.actionItemsMap);
-  const isaacActionItems = processed.isaac.reduce((sum, e) => sum + e.actionItems.length, 0);
-  const totalActionItems = actionItemsFromMap + isaacActionItems;
 
   // Collect all email IDs
   const allEmailIds = [
-    ...processed.isaac.map(e => e.emailId),
-    ...processed.amazon.map(e => e.emailId),
-    ...processed.billing.map(e => e.emailId),
-    ...processed.investments.map(e => e.emailId),
-    ...processed.kickstarter.map(e => e.emailId),
-    ...processed.newsletters.map(e => e.emailId),
-    ...processed.marketing.map(e => e.emailId),
-    ...processed.notifications.map(e => e.emailId),
+    ...processed.isaac,
+    ...processed.amazon,
+    ...processed.billing,
+    ...processed.investments,
+    ...processed.kickstarter,
+    ...processed.newsletters,
+    ...processed.marketing,
+    ...processed.notifications,
   ];
 
   // Build tabs for categories with emails
@@ -403,102 +182,24 @@ export function generateUnifiedPage(
       height: 18px;
       cursor: pointer;
     }
-    .email-content, .billing-content, .investment-content, .kickstarter-content, .newsletter-content, .marketing-content, .notification-content {
+    .email-content {
       flex: 1;
       display: flex;
       flex-direction: column;
       gap: 4px;
     }
-    .email-subject, .source-name, .newsletter-name, .brand-name {
+    .email-subject {
       font-weight: 600;
       color: #1f2937;
     }
-    .summary {
-      line-height: 1.4;
+    .email-from {
       color: #6b7280;
-      font-size: 0.95em;
-    }
-    .subcategory h3 {
-      font-size: 0.95em;
-      color: #4b5563;
-      margin: 15px 0 10px 0;
-      padding-bottom: 5px;
-      border-bottom: 1px solid #e5e7eb;
-    }
-    .action-list, .action-items {
-      margin: 8px 0 0 0;
-      padding-left: 0;
-      list-style: none;
-    }
-    .action-item {
-      background: #fef3c7;
-      padding: 8px 12px;
-      border-radius: 4px;
-      margin-bottom: 5px;
-      border-left: 3px solid #f59e0b;
       font-size: 0.9em;
     }
-    .action-item .context {
-      display: block;
-      font-size: 0.9em;
-      color: #92400e;
-      margin-top: 4px;
-    }
-    .action-link {
-      display: inline-block;
-      margin-top: 4px;
-      color: #2563eb;
-      text-decoration: none;
-    }
-    .action-steps {
-      margin: 6px 0 0 0;
-      padding-left: 20px;
-      font-size: 0.9em;
-      color: #92400e;
-    }
-    .action-steps li {
-      margin-bottom: 3px;
-    }
-    .kickstarter-actions {
-      margin: 8px 0 0 0;
-      padding-left: 0;
-      list-style: none;
-    }
-    .kickstarter-actions li {
-      padding: 4px 0;
-      color: #4b5563;
-      font-size: 0.9em;
-    }
-    .amounts {
-      margin: 8px 0 0 0;
-      padding: 10px;
-      list-style: none;
-      background: #f9fafb;
-      border-radius: 6px;
-    }
-    .amounts li {
-      display: flex;
-      justify-content: space-between;
-      padding: 4px 0;
-      font-size: 0.9em;
-      border-bottom: 1px solid #e5e7eb;
-    }
-    .amounts li:last-child { border-bottom: none; }
-    .amount-desc { color: #4b5563; }
-    .amount-value { font-weight: 500; color: #059669; }
-    .deadlines {
-      margin: 8px 0 0 0;
-      padding-left: 0;
-      list-style: none;
-    }
-    .deadlines li {
-      background: #fef3c7;
-      padding: 6px 10px;
-      border-radius: 4px;
-      margin-bottom: 4px;
-      border-left: 3px solid #f59e0b;
-      font-size: 0.9em;
-      color: #92400e;
+    .email-snippet {
+      color: #9ca3af;
+      font-size: 0.85em;
+      line-height: 1.4;
     }
     .archive-form {
       margin-top: 30px;
@@ -529,20 +230,12 @@ export function generateUnifiedPage(
       cursor: pointer;
     }
     .select-btn:hover { background: #f9fafb; }
-    .has-action-items {
-      border-left: 3px solid #ef4444;
-      background: #fef2f2;
-    }
-    .email-subject {
-      font-weight: 600;
-      color: #1f2937;
-    }
   </style>
 </head>
 <body>
   <h1>Email Digest</h1>
   <div class="summary-header">
-    <strong>${totalEmails} emails</strong> found across ${activeTabs.length} categories${totalActionItems > 0 ? ` with <strong>${totalActionItems} action item${totalActionItems > 1 ? 's' : ''}</strong>` : ''}
+    <strong>${totalEmails} emails</strong> found across ${activeTabs.length} categories
   </div>
 
   <div class="tabs">
@@ -565,7 +258,7 @@ export function generateUnifiedPage(
             Select All Isaac
           </label>
         </div>
-        ${renderIsaacSection(processed)}
+        ${renderEmailList(processed.isaac, processed.emailsById)}
       </div>
     ` : ''}
 
@@ -577,7 +270,7 @@ export function generateUnifiedPage(
             Select All Amazon
           </label>
         </div>
-        ${renderAmazonSection(processed)}
+        ${renderEmailList(processed.amazon, processed.emailsById)}
       </div>
     ` : ''}
 
@@ -589,7 +282,7 @@ export function generateUnifiedPage(
             Select All Billing
           </label>
         </div>
-        ${renderBillingSection(processed)}
+        ${renderEmailList(processed.billing, processed.emailsById)}
       </div>
     ` : ''}
 
@@ -601,7 +294,7 @@ export function generateUnifiedPage(
             Select All Investments
           </label>
         </div>
-        ${renderInvestmentsSection(processed)}
+        ${renderEmailList(processed.investments, processed.emailsById)}
       </div>
     ` : ''}
 
@@ -613,7 +306,7 @@ export function generateUnifiedPage(
             Select All Kickstarter
           </label>
         </div>
-        ${renderKickstarterSection(processed)}
+        ${renderEmailList(processed.kickstarter, processed.emailsById)}
       </div>
     ` : ''}
 
@@ -625,7 +318,7 @@ export function generateUnifiedPage(
             Select All Newsletters
           </label>
         </div>
-        ${renderNewslettersSection(processed)}
+        ${renderEmailList(processed.newsletters, processed.emailsById)}
       </div>
     ` : ''}
 
@@ -637,7 +330,7 @@ export function generateUnifiedPage(
             Select All Marketing
           </label>
         </div>
-        ${renderMarketingSection(processed)}
+        ${renderEmailList(processed.marketing, processed.emailsById)}
       </div>
     ` : ''}
 
@@ -649,7 +342,7 @@ export function generateUnifiedPage(
             Select All Notifications
           </label>
         </div>
-        ${renderNotificationsSection(processed)}
+        ${renderEmailList(processed.notifications, processed.emailsById)}
       </div>
     ` : ''}
 

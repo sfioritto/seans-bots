@@ -1,21 +1,74 @@
+import { z } from 'zod';
 import { brain } from '../brain.js';
 import { archiveWebhook } from '../webhooks/archive.js';
-import * as isaac from './email-digest/processors/isaac.js';
-import * as actionItems from './email-digest/processors/action-items.js';
-import * as amazon from './email-digest/processors/amazon.js';
-import * as billing from './email-digest/processors/billing.js';
-import * as investments from './email-digest/processors/investments.js';
-import * as kickstarter from './email-digest/processors/kickstarter.js';
-import * as newsletters from './email-digest/processors/newsletters.js';
-import * as marketing from './email-digest/processors/marketing.js';
-import * as notifications from './email-digest/processors/notifications.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
 import type { ProcessedEmails, RawEmail } from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';
 
+// Category definitions for the AI prompt
+// Helper for retry with exponential backoff
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  baseDelayMs = 1000
+): Promise<T> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      const isRateLimit = error?.message?.includes('429') ||
+                          error?.message?.toLowerCase().includes('rate') ||
+                          error?.message?.toLowerCase().includes('quota');
+
+      if (!isRateLimit || attempt === maxRetries) {
+        throw error;
+      }
+
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      console.log(`Rate limited, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
+const CATEGORY_DESCRIPTIONS = `
+Categories:
+- isaac: Emails about Isaac (son) - school, rock climbing, summer camps, choir, health, activities
+- amazon: Amazon orders, shipping, deliveries, returns, billing
+- billing: Bills, receipts, invoices, subscriptions, bank statements, payment confirmations
+- investments: Investment accounts, portfolio updates, dividends, trade confirmations, statements
+- kickstarter: Kickstarter, Indiegogo, crowdfunding project updates
+- newsletters: Newsletter subscriptions, periodic digests
+- marketing: Marketing emails, promotions, sales, ads
+- notifications: Low-value system notifications, product updates, policy changes, announcements
+`;
+
+// Schema for categorization result
+const categorySchema = z.object({
+  categories: z.array(z.enum([
+    'isaac', 'amazon', 'billing', 'investments',
+    'kickstarter', 'newsletters', 'marketing', 'notifications'
+  ])),
+});
+
+function buildCategorizationPrompt(email: RawEmail): string {
+  return `Categorize this email into one or more categories.
+
+From: ${email.from}
+Subject: ${email.subject}
+Body: ${email.body.substring(0, 2000)}
+
+${CATEGORY_DESCRIPTIONS}
+
+Return the categories this email belongs to. An email can belong to multiple categories if appropriate.`;
+}
+
 const emailDigestBrain = brain({
   title: 'email-digest',
-  description: 'Categorizes inbox emails across accounts into Isaac, Amazon, billing, investments, Kickstarter, newsletters, marketing, and notifications with action item extraction',
+  description: 'Categorizes inbox emails across accounts into Isaac, Amazon, billing, investments, Kickstarter, newsletters, marketing, and notifications',
 })
   // Step 0: Run Mercury receipts brain first
   .brain(
@@ -33,28 +86,9 @@ const emailDigestBrain = brain({
   .step('Fetch all inbox emails from all accounts', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();
 
-
-    if (accounts.length === 0) {
-      console.log('No Gmail accounts configured');
-      return {
-        ...state,
-        allEmails: [] as any[],
-        claimedEmailIds: [] as string[],
-        processedIsaac: [] as any[],
-        processedAmazon: [] as any[],
-        processedBilling: [] as any[],
-        processedInvestments: [] as any[],
-        processedKickstarter: [] as any[],
-        processedNewsletters: [] as any[],
-        processedMarketing: [] as any[],
-        processedNotifications: [] as any[],
-        actionItemsMap: {} as Record<string, any[]>,
-      };
-    }
-
     console.log(`Fetching emails from ${accounts.length} accounts...`);
 
-    const allEmails: any[] = [];
+    const emailsById: Record<string, RawEmail> = {};
     const query = 'label:inbox';
 
     for (const account of accounts) {
@@ -63,7 +97,7 @@ const emailDigestBrain = brain({
 
       for (const message of messages) {
         const details = await gmail.getMessageDetails(account.refreshToken, message.id);
-        allEmails.push({
+        emailsById[message.id] = {
           id: message.id,
           subject: details.subject,
           from: details.from,
@@ -72,7 +106,7 @@ const emailDigestBrain = brain({
           snippet: details.snippet,
           accountName: account.name,
           refreshToken: account.refreshToken,
-        });
+        };
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
 
@@ -80,323 +114,114 @@ const emailDigestBrain = brain({
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
-    if (allEmails.length === 0) {
+    const emailCount = Object.keys(emailsById).length;
+    if (emailCount === 0) {
       console.log('No inbox emails found across all accounts');
     } else {
-      console.log(`Found ${allEmails.length} total inbox emails across ${accounts.length} accounts`);
+      console.log(`Found ${emailCount} total inbox emails across ${accounts.length} accounts`);
     }
 
     return {
       ...state,
-      allEmails,
-      claimedEmailIds: [] as string[],
-      processedIsaac: [] as any[],
-      processedAmazon: [] as any[],
-      processedBilling: [] as any[],
-      processedInvestments: [] as any[],
-      processedKickstarter: [] as any[],
-      processedNewsletters: [] as any[],
-      processedMarketing: [] as any[],
-      processedNotifications: [] as any[],
-      actionItemsMap: {} as Record<string, any[]>,
+      emailsById: emailsById as any,
+      isaac: [] as string[],
+      amazon: [] as string[],
+      billing: [] as string[],
+      investments: [] as string[],
+      kickstarter: [] as string[],
+      newsletters: [] as string[],
+      marketing: [] as string[],
+      notifications: [] as string[],
     };
   })
 
-  // Step 2: Process ISAAC emails (highest priority - school, rock climbing, camps, etc.)
-  .prompt('Identify Isaac-related emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return isaac.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: isaac.isaacIdentificationSchema,
-      name: 'isaacResult' as const,
-    },
-  })
-  .step('Process Isaac results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = isaac.processResults(unclaimed, state.isaacResult);
-    const newClaimed = [...claimed, ...isaac.getClaimedIds(processed)];
+  // Step 2: Categorize all emails
+  .step('Categorize all emails', async ({ state, client }) => {
+    const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
+    const emailEntries = Object.entries(emailsById);
 
-    console.log(`Found ${processed.length} Isaac-related emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedIsaac: processed as any[],
-    };
-  })
-
-  // Step 3: Process AMAZON emails
-  .prompt('Identify Amazon emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return amazon.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: amazon.amazonIdentificationSchema,
-      name: 'amazonResult' as const,
-    },
-  })
-  .step('Process Amazon results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = amazon.processResults(unclaimed, state.amazonResult);
-    const newClaimed = [...claimed, ...amazon.getClaimedIds(processed)];
-
-    console.log(`Found ${processed.length} Amazon emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedAmazon: processed as any[],
-    };
-  })
-
-  // Step 4: Process BILLING emails (receipts, invoices, subscriptions, statements)
-  .prompt('Identify billing emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return billing.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: billing.billingIdentificationSchema,
-      name: 'billingResult' as const,
-    },
-  })
-  .step('Process billing results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = billing.processResults(unclaimed, state.billingResult);
-    const newClaimed = [...claimed, ...billing.getClaimedIds(processed)];
-
-    console.log(`Found ${processed.length} billing emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedBilling: processed as any[],
-    };
-  })
-
-  // Step 4b: Process INVESTMENT emails
-  .prompt('Identify investment emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return investments.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: investments.investmentIdentificationSchema,
-      name: 'investmentsResult' as const,
-    },
-  })
-  .step('Process investments results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = investments.processResults(unclaimed, state.investmentsResult);
-    const newClaimed = [...claimed, ...investments.getClaimedIds(processed)];
-
-    console.log(`Found ${processed.length} investment emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedInvestments: processed as any[],
-    };
-  })
-
-  // Step 5: Process KICKSTARTER
-  .prompt('Identify Kickstarter emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return kickstarter.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: kickstarter.kickstarterIdentificationSchema,
-      name: 'kickstarterResult' as const,
-    },
-  })
-  .step('Process Kickstarter results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = kickstarter.processResults(unclaimed, state.kickstarterResult);
-    const newClaimed = [...claimed, ...kickstarter.getClaimedIds(processed)];
-
-    console.log(`Found ${processed.length} Kickstarter emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedKickstarter: processed as any[],
-    };
-  })
-
-  // Step 5: Process NEWSLETTERS
-  .prompt('Identify newsletter emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return newsletters.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: newsletters.newsletterIdentificationSchema,
-      name: 'newslettersResult' as const,
-    },
-  })
-  .step('Process newsletters results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = newsletters.processResults(unclaimed, state.newslettersResult);
-    const newClaimed = [...claimed, ...newsletters.getClaimedIds(processed)];
-
-    console.log(`Found ${processed.length} newsletter emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedNewsletters: processed as any[],
-    };
-  })
-
-  // Step 6: Process MARKETING emails
-  .prompt('Identify marketing emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return marketing.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: marketing.marketingIdentificationSchema,
-      name: 'marketingResult' as const,
-    },
-  })
-  .step('Process marketing results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = marketing.processResults(unclaimed, state.marketingResult);
-    const newClaimed = [...claimed, ...marketing.getClaimedIds(processed)];
-
-    console.log(`Found ${processed.length} marketing emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedMarketing: processed as any[],
-    };
-  })
-
-  // Step 8: Process NOTIFICATION emails (low-value product updates, policy changes, etc.)
-  .prompt('Identify notification emails', {
-    template: ({ allEmails, claimedEmailIds }) => {
-      const emails = allEmails as any[];
-      const claimed = (claimedEmailIds || []) as string[];
-      const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-      return notifications.buildIdentificationPrompt(unclaimed);
-    },
-    outputSchema: {
-      schema: notifications.notificationIdentificationSchema,
-      name: 'notificationsResult' as const,
-    },
-  })
-  .step('Process notifications results', ({ state }) => {
-    const emails = state.allEmails as any[];
-    const claimed = (state.claimedEmailIds || []) as string[];
-    const unclaimed = emails.filter((e: any) => !claimed.includes(e.id));
-    const processed = notifications.processResults(unclaimed, state.notificationsResult);
-    const newClaimed = [...claimed, ...notifications.getClaimedIds(processed)];
-
-    console.log(`Found ${processed.length} notification emails`);
-
-    return {
-      ...state,
-      claimedEmailIds: newClaimed,
-      processedNotifications: processed as any[],
-    };
-  })
-
-  // Step 9: Extract ACTION ITEMS from all categorized emails (runs last, doesn't claim)
-  .step('Collect all categorized emails for action item extraction', ({ state }) => {
-    // Gather all categorized emails' raw email data
-    const allCategorizedEmails: any[] = [];
-
-    for (const email of state.processedAmazon as any[]) {
-      allCategorizedEmails.push(email.rawEmail);
-    }
-    for (const email of state.processedBilling as any[]) {
-      allCategorizedEmails.push(email.rawEmail);
-    }
-    for (const email of state.processedInvestments as any[]) {
-      allCategorizedEmails.push(email.rawEmail);
-    }
-    for (const email of state.processedKickstarter as any[]) {
-      allCategorizedEmails.push(email.rawEmail);
-    }
-    for (const email of state.processedNewsletters as any[]) {
-      allCategorizedEmails.push(email.rawEmail);
+    if (emailEntries.length === 0) {
+      console.log('No emails to categorize');
+      return state;
     }
 
-    console.log(`Extracting action items from ${allCategorizedEmails.length} categorized emails`);
+    console.log(`Categorizing ${emailEntries.length} emails...`);
+
+    const categories: Record<string, string[]> = {
+      isaac: [],
+      amazon: [],
+      billing: [],
+      investments: [],
+      kickstarter: [],
+      newsletters: [],
+      marketing: [],
+      notifications: [],
+    };
+
+    const BATCH_SIZE = 20; // Aggressive batching, backoff handles rate limits
+
+    // Process in batches
+    for (let i = 0; i < emailEntries.length; i += BATCH_SIZE) {
+      const batch = emailEntries.slice(i, i + BATCH_SIZE);
+
+      // Fire off all requests in the batch with small delays between sends
+      const promises = batch.map(async ([id, email], idx) => {
+        // Small stagger to spread out initial requests
+        await new Promise((resolve) => setTimeout(resolve, idx * 30));
+        const result = await withRetry(() =>
+          client.generateObject({
+            prompt: buildCategorizationPrompt(email),
+            schema: categorySchema,
+            schemaName: 'emailCategories',
+          })
+        );
+        return { id, categories: result.categories };
+      });
+
+      // Wait for all in batch to complete
+      const results = await Promise.all(promises);
+
+      // Process results
+      for (const { id, categories: cats } of results) {
+        for (const cat of cats) {
+          if (categories[cat]) {
+            categories[cat].push(id);
+          }
+        }
+      }
+
+      console.log(`Processed batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(emailEntries.length / BATCH_SIZE)}`);
+    }
+
+    console.log(`Categorization complete:`);
+    console.log(`  Isaac: ${categories.isaac.length}`);
+    console.log(`  Amazon: ${categories.amazon.length}`);
+    console.log(`  Billing: ${categories.billing.length}`);
+    console.log(`  Investments: ${categories.investments.length}`);
+    console.log(`  Kickstarter: ${categories.kickstarter.length}`);
+    console.log(`  Newsletters: ${categories.newsletters.length}`);
+    console.log(`  Marketing: ${categories.marketing.length}`);
+    console.log(`  Notifications: ${categories.notifications.length}`);
 
     return {
       ...state,
-      categorizedEmailsForActionItems: allCategorizedEmails,
-    };
-  })
-  .prompt('Extract action items from categorized emails', {
-    template: ({ categorizedEmailsForActionItems }) => {
-      const emails = (categorizedEmailsForActionItems || []) as RawEmail[];
-      return actionItems.buildExtractionPrompt(emails);
-    },
-    outputSchema: {
-      schema: actionItems.actionItemExtractionSchema,
-      name: 'actionItemsResult' as const,
-    },
-  })
-  .step('Process action items results', ({ state }) => {
-    const emails = (state.categorizedEmailsForActionItems || []) as RawEmail[];
-    const actionItemsMap = actionItems.processResults(emails, state.actionItemsResult);
-    const totalActionItems = actionItems.countActionItems(actionItemsMap);
-
-    console.log(`Found ${totalActionItems} action items across ${Object.keys(actionItemsMap).length} emails`);
-
-    return {
-      ...state,
-      actionItemsMap: actionItemsMap as any,
+      cool: 'news',
+      ...categories,
     };
   })
 
-  // Step 10: Generate unified HTML page
+  // Step 3: Generate unified HTML page
   .step('Generate unified summary page', async ({ state, pages, env }) => {
     const processedData: ProcessedEmails = {
-      isaac: state.processedIsaac as any[],
-      amazon: state.processedAmazon as any[],
-      billing: state.processedBilling as any[],
-      investments: state.processedInvestments as any[],
-      kickstarter: state.processedKickstarter as any[],
-      newsletters: state.processedNewsletters as any[],
-      marketing: state.processedMarketing as any[],
-      notifications: state.processedNotifications as any[],
-      actionItemsMap: state.actionItemsMap as any,
+      emailsById: state.emailsById,
+      isaac: state.isaac as unknown as string[],
+      amazon: state.amazon as unknown as string[],
+      billing: state.billing as unknown as string[],
+      investments: state.investments as unknown as string[],
+      kickstarter: state.kickstarter as unknown as string[],
+      newsletters: state.newsletters as unknown as string[],
+      marketing: state.marketing as unknown as string[],
+      notifications: state.notifications as unknown as string[],
     };
 
     const totalEmails =
@@ -435,40 +260,31 @@ const emailDigestBrain = brain({
     return { ...state, sessionId, pageUrl };
   })
 
-  // Step 11: Send notification
+  // Step 4: Send notification
   .step('Send notification', async ({ state, ntfy }) => {
     if (!state.pageUrl) {
       console.log('No page created, skipping notification');
       return state;
     }
 
-    const processedData: ProcessedEmails = {
-      isaac: state.processedIsaac as any[],
-      amazon: state.processedAmazon as any[],
-      billing: state.processedBilling as any[],
-      investments: state.processedInvestments as any[],
-      kickstarter: state.processedKickstarter as any[],
-      newsletters: state.processedNewsletters as any[],
-      marketing: state.processedMarketing as any[],
-      notifications: state.processedNotifications as any[],
-      actionItemsMap: state.actionItemsMap as any,
-    };
-
-    // Count action items from actionItemsMap (for non-Isaac emails) + Isaac action items
-    const actionItemsFromMap = actionItems.countActionItems(processedData.actionItemsMap);
-    const isaacActionItems = processedData.isaac.reduce((sum, e) => sum + e.actionItems.length, 0);
-    const totalActionItems = actionItemsFromMap + isaacActionItems;
+    const isaac = state.isaac as unknown as string[];
+    const amazon = state.amazon as unknown as string[];
+    const billing = state.billing as unknown as string[];
+    const investments = state.investments as unknown as string[];
+    const kickstarter = state.kickstarter as unknown as string[];
+    const newsletters = state.newsletters as unknown as string[];
+    const marketing = state.marketing as unknown as string[];
+    const notifications = state.notifications as unknown as string[];
 
     const counts = [
-      processedData.isaac.length > 0 ? `${processedData.isaac.length} Isaac` : null,
-      processedData.amazon.length > 0 ? `${processedData.amazon.length} Amazon` : null,
-      processedData.billing.length > 0 ? `${processedData.billing.length} billing` : null,
-      processedData.investments.length > 0 ? `${processedData.investments.length} investments` : null,
-      processedData.kickstarter.length > 0 ? `${processedData.kickstarter.length} Kickstarter` : null,
-      processedData.newsletters.length > 0 ? `${processedData.newsletters.length} newsletters` : null,
-      processedData.marketing.length > 0 ? `${processedData.marketing.length} marketing` : null,
-      processedData.notifications.length > 0 ? `${processedData.notifications.length} notifications` : null,
-      totalActionItems > 0 ? `${totalActionItems} action items` : null,
+      isaac.length > 0 ? `${isaac.length} Isaac` : null,
+      amazon.length > 0 ? `${amazon.length} Amazon` : null,
+      billing.length > 0 ? `${billing.length} billing` : null,
+      investments.length > 0 ? `${investments.length} investments` : null,
+      kickstarter.length > 0 ? `${kickstarter.length} Kickstarter` : null,
+      newsletters.length > 0 ? `${newsletters.length} newsletters` : null,
+      marketing.length > 0 ? `${marketing.length} marketing` : null,
+      notifications.length > 0 ? `${notifications.length} notifications` : null,
     ].filter(Boolean);
 
     const message = `Email digest: ${counts.join(', ')}`;
@@ -479,20 +295,25 @@ const emailDigestBrain = brain({
     return state;
   })
 
-  // Step 12: Wait for archive confirmation
+  // Step 5: Wait for archive confirmation
   .step('Wait for archive confirmation', ({ state }) => {
     if (!state.sessionId) {
       console.log('No session, completing without waiting');
       return state;
     }
 
+    const sessionId = state.sessionId as string;
+    console.log(`Waiting for user confirmation with sessionId: ${sessionId}`);
+
+    const webhook = archiveWebhook(sessionId);
+
     return {
       state,
-      waitFor: [archiveWebhook(state.sessionId as string)],
+      waitFor: [webhook],
     };
   })
 
-  // Step 13: Archive selected emails (handles multiple accounts)
+  // Step 6: Archive selected emails (handles multiple accounts)
   .step('Archive emails', async ({ state, response, gmail }) => {
     if (!state.sessionId) {
       console.log('No emails to archive');
@@ -507,18 +328,21 @@ const emailDigestBrain = brain({
     }
 
     const selectedEmailIds = new Set(webhookResponse.emailIds);
-    const allEmails = state.allEmails as any[];
+    const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
+
+    console.log(`Archiving ${selectedEmailIds.size} emails...`);
 
     // Group emails by account (refreshToken)
     const emailsByAccount: Record<string, { refreshToken: string; emailIds: string[] }> = {};
 
-    for (const email of allEmails) {
-      if (selectedEmailIds.has(email.id)) {
+    for (const emailId of selectedEmailIds) {
+      const email = emailsById[emailId];
+      if (email) {
         const key = email.accountName;
         if (!emailsByAccount[key]) {
           emailsByAccount[key] = { refreshToken: email.refreshToken, emailIds: [] };
         }
-        emailsByAccount[key].emailIds.push(email.id);
+        emailsByAccount[key].emailIds.push(emailId);
       }
     }
 
