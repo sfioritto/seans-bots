@@ -53,14 +53,16 @@ const billingEnrichmentSchema = z.object({
 });
 
 function buildCategorizationPrompt(email: RawEmail): string {
-  return `Categorize this email into exactly ONE category. Choose the BEST fit.
+  return `I am Sean Fioritto. My wife is Beth Fioritto. Her most common email address is beth.lukes@gmail.com. The emails you are reading are from my inbox. My kids are Isaac and Ada.
+
+  Categorize this email into exactly ONE category. Choose the BEST fit.
 
 From: ${email.from}
 Subject: ${email.subject}
-Body: ${email.body.substring(0, 1500)}
+Body: ${email.body}
 
 Categories (pick ONE):
-- children: Emails about kids (school, activities, camps, health, sports, choir, etc.)
+- children: Emails about MY kids, so Ada and Isaac (school, activities, camps, health, sports, choir, etc.)
 - amazon: Amazon orders, shipping, deliveries, returns
 - billing: Bills, receipts, invoices, subscriptions, bank statements, payment confirmations
 - investments: Investment accounts, portfolio updates, dividends, trade confirmations
@@ -68,6 +70,7 @@ Categories (pick ONE):
 - newsletters: Newsletter subscriptions, periodic digests
 - marketing: Marketing emails, promotions, sales, ads
 - notifications: System notifications, product updates, policy changes, announcements
+- Uncategorized: If it's not a great fit in any of the other categories, put it here.
 
 Think about what this email is PRIMARILY about, then choose the single best category.`;
 }
@@ -77,7 +80,7 @@ function buildChildrenEnrichmentPrompt(email: RawEmail): string {
 
 From: ${email.from}
 Subject: ${email.subject}
-Body: ${email.body.substring(0, 1500)}
+Body: ${email.body}
 
 Provide:
 1. A one-sentence summary of what this email is about
@@ -103,10 +106,10 @@ const emailDigestBrain = brain({
   .brain(
     'Process Mercury receipt requests',
     mercuryReceiptsBrain,
-    ({ state, brainState }) => ({
+    ({ state, brainState: { forwardedCount, archivedCount } }) => ({
       ...state,
-      mercuryForwardedCount: brainState.forwardedCount ?? 0,
-      mercuryArchivedCount: brainState.archivedCount ?? 0,
+      mercuryForwardedCount: forwardedCount ?? 0,
+      mercuryArchivedCount: archivedCount ?? 0,
     }),
     () => ({})
   )
