@@ -26,6 +26,19 @@ interface GmailAccount {
   refreshToken: string;
 }
 
+interface BodyParts {
+  text: string;
+  html: string | null;
+}
+
+interface AttachmentInfo {
+  partId: string;
+  filename: string;
+  mimeType: string;
+  attachmentId: string | null;
+  data: string | null;
+}
+
 /**
  * Create an authenticated Gmail client for a specific account
  */
@@ -94,6 +107,168 @@ function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
   }
 
   return '';
+}
+
+/**
+ * Extract both text/plain and text/html body content from Gmail message payload
+ */
+function extractBodyParts(payload: gmail_v1.Schema$MessagePart | undefined): BodyParts {
+  const result: BodyParts = { text: '', html: null };
+
+  if (!payload) return result;
+
+  function findParts(part: gmail_v1.Schema$MessagePart): void {
+    if (part.mimeType === 'text/plain' && part.body?.data && !result.text) {
+      result.text = decodeBody(part.body.data);
+    }
+    if (part.mimeType === 'text/html' && part.body?.data && !result.html) {
+      result.html = decodeBody(part.body.data);
+    }
+    if (part.parts) {
+      for (const subpart of part.parts) {
+        findParts(subpart);
+      }
+    }
+  }
+
+  // Check if the payload itself is a simple text message
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    result.text = decodeBody(payload.body.data);
+  } else if (payload.mimeType === 'text/html' && payload.body?.data) {
+    result.html = decodeBody(payload.body.data);
+  } else {
+    findParts(payload);
+  }
+
+  return result;
+}
+
+/**
+ * Extract attachment information from Gmail message payload
+ */
+function extractAttachments(payload: gmail_v1.Schema$MessagePart | undefined): AttachmentInfo[] {
+  const attachments: AttachmentInfo[] = [];
+
+  if (!payload) return attachments;
+
+  function findAttachments(part: gmail_v1.Schema$MessagePart): void {
+    // Check if this part is an attachment (has filename and is not a body part)
+    const filename = part.filename;
+    const mimeType = part.mimeType || 'application/octet-stream';
+
+    // Skip text/plain and text/html body parts (they're the email body, not attachments)
+    const isBodyPart = (mimeType === 'text/plain' || mimeType === 'text/html') && !filename;
+
+    if (filename && !isBodyPart) {
+      attachments.push({
+        partId: part.partId || '',
+        filename,
+        mimeType,
+        attachmentId: part.body?.attachmentId || null,
+        data: part.body?.data || null
+      });
+    }
+
+    // Recursively search nested parts
+    if (part.parts) {
+      for (const subpart of part.parts) {
+        findAttachments(subpart);
+      }
+    }
+  }
+
+  findAttachments(payload);
+  return attachments;
+}
+
+/**
+ * Fetch attachment data for large attachments that aren't inline
+ */
+async function fetchAttachmentData(
+  gmail: gmail_v1.Gmail,
+  messageId: string,
+  attachmentId: string
+): Promise<string> {
+  const response = await gmail.users.messages.attachments.get({
+    userId: 'me',
+    messageId,
+    id: attachmentId
+  });
+
+  return response.data.data || '';
+}
+
+/**
+ * Build a properly formatted forwarded message with inline body and top-level attachments
+ */
+function buildForwardedMessage(params: {
+  to: string;
+  subject: string;
+  note: string;
+  originalFrom: string;
+  originalDate: string;
+  originalSubject: string;
+  bodyParts: BodyParts;
+  attachments: Array<{
+    filename: string;
+    mimeType: string;
+    data: string; // base64url encoded
+  }>;
+}): string {
+  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+
+  // Build the forward header
+  const forwardHeader = [
+    '---------- Forwarded message ---------',
+    `From: ${params.originalFrom}`,
+    `Date: ${params.originalDate}`,
+    `Subject: ${params.originalSubject}`,
+    ''
+  ].join('\r\n');
+
+  // Combine note with forward header and original body
+  const textBody = [
+    params.note || '',
+    '',
+    forwardHeader,
+    params.bodyParts.text
+  ].join('\r\n');
+
+  const parts: string[] = [];
+
+  // Add headers
+  parts.push(`To: ${params.to}`);
+  parts.push(`Subject: ${params.subject}`);
+  parts.push('MIME-Version: 1.0');
+  parts.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  parts.push('');
+
+  // Add text body part
+  parts.push(`--${boundary}`);
+  parts.push('Content-Type: text/plain; charset=utf-8');
+  parts.push('Content-Transfer-Encoding: quoted-printable');
+  parts.push('');
+  parts.push(textBody);
+
+  // Add each attachment at the top level
+  for (const attachment of params.attachments) {
+    // Convert base64url to standard base64
+    const base64Data = attachment.data.replace(/-/g, '+').replace(/_/g, '/');
+
+    parts.push(`--${boundary}`);
+    parts.push(`Content-Type: ${attachment.mimeType}; name="${attachment.filename}"`);
+    parts.push('Content-Transfer-Encoding: base64');
+    parts.push(`Content-Disposition: attachment; filename="${attachment.filename}"`);
+    parts.push('');
+    // Split base64 into 76-character lines per RFC 2045
+    const lines = base64Data.match(/.{1,76}/g) || [];
+    parts.push(lines.join('\r\n'));
+  }
+
+  // Close the multipart
+  parts.push(`--${boundary}--`);
+
+  return parts.join('\r\n');
 }
 
 /**
@@ -245,7 +420,7 @@ async function sendMessage(
 }
 
 /**
- * Forward an email message to a recipient, preserving HTML and attachments
+ * Forward an email message to a recipient, preserving attachments at top level
  */
 async function forwardMessage(
   refreshToken: string,
@@ -255,61 +430,65 @@ async function forwardMessage(
 ): Promise<{ id: string; threadId: string }> {
   const gmail = createGmailClient(refreshToken);
 
-  // Get the original message in raw format (full RFC 2822)
-  const rawResponse = await gmail.users.messages.get({
+  // Get the original message with full MIME structure
+  const response = await gmail.users.messages.get({
     userId: 'me',
     id: messageId,
-    format: 'raw'
+    format: 'full'
   });
 
-  // Get message details for headers
-  const original = await getMessageDetails(refreshToken, messageId);
+  const message = response.data;
+  const headers = message.payload?.headers;
 
-  // Decode the raw message
-  const rawMessage = rawResponse.data.raw || '';
-  const decodedMessage = Buffer.from(
-    rawMessage.replace(/-/g, '+').replace(/_/g, '/'),
-    'base64'
-  ).toString('utf-8');
+  // Extract headers
+  const originalFrom = getHeader(headers, 'From');
+  const originalDate = getHeader(headers, 'Date');
+  const originalSubject = getHeader(headers, 'Subject');
 
   // Build forwarded subject
-  const subject = original.subject.startsWith('Fwd:')
-    ? original.subject
-    : `Fwd: ${original.subject}`;
+  const subject = originalSubject.startsWith('Fwd:')
+    ? originalSubject
+    : `Fwd: ${originalSubject}`;
 
-  // Create a new multipart message that wraps the original
-  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+  // Extract body parts (text and HTML)
+  const bodyParts = extractBodyParts(message.payload);
 
-  // Build the forwarding note
-  const forwardNote = [
-    note || '',
-    '',
-    '---------- Forwarded message ---------',
-    `From: ${original.from}`,
-    `Date: ${original.date}`,
-    `Subject: ${original.subject}`,
-    ''
-  ].join('\r\n');
+  // Extract attachments
+  const attachmentInfos = extractAttachments(message.payload);
 
-  // Create a new message that includes the original as an attachment (message/rfc822)
-  // This preserves all HTML, attachments, and formatting
-  const newMessage = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    `Content-Type: text/plain; charset=utf-8`,
-    '',
-    forwardNote,
-    `--${boundary}`,
-    `Content-Type: message/rfc822`,
-    `Content-Disposition: attachment; filename="forwarded_message.eml"`,
-    '',
-    decodedMessage,
-    `--${boundary}--`
-  ].join('\r\n');
+  // Fetch attachment data for any large attachments
+  const attachments: Array<{ filename: string; mimeType: string; data: string }> = [];
+
+  for (const info of attachmentInfos) {
+    let data = info.data;
+
+    // If attachment data is not inline, fetch it
+    if (!data && info.attachmentId) {
+      data = await fetchAttachmentData(gmail, messageId, info.attachmentId);
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    if (data) {
+      attachments.push({
+        filename: info.filename,
+        mimeType: info.mimeType,
+        data
+      });
+    }
+  }
+
+  // Build the forwarded message with attachments at top level
+  const newMessage = buildForwardedMessage({
+    to,
+    subject,
+    note: note || '',
+    originalFrom,
+    originalDate,
+    originalSubject,
+    bodyParts,
+    attachments
+  });
 
   const raw = Buffer.from(newMessage)
     .toString('base64')
@@ -317,14 +496,14 @@ async function forwardMessage(
     .replace(/\//g, '_')
     .replace(/=+$/, '');
 
-  const response = await gmail.users.messages.send({
+  const sendResponse = await gmail.users.messages.send({
     userId: 'me',
     requestBody: { raw }
   });
 
   return {
-    id: response.data.id || '',
-    threadId: response.data.threadId || ''
+    id: sendResponse.data.id || '',
+    threadId: sendResponse.data.threadId || ''
   };
 }
 
