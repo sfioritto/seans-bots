@@ -2,7 +2,7 @@ import { brain } from '../brain.js';
 import { z } from 'zod';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { VercelClient } from '@positronic/client-vercel';
-import { mercuryReceiptsWebhook } from '../webhooks/mercury-receipts.js';
+import mercuryReceiptsWebhook from '../webhooks/mercury-receipts.js';
 import { generateMercuryReceiptsPage } from './mercury-receipts/templates/confirmation-page.js';
 import type {
   RawEmail,

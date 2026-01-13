@@ -1,7 +1,7 @@
 import { brain } from '../brain.js';
 import { aiRelatedPostsPrompt } from '../prompts/hn-weekly-post/ai-related-posts.js';
 import { generateWeeklyPostPrompt } from '../prompts/hn-weekly-post/generate-weekly-post.js';
-import { slackWebhook } from '../webhooks/slack.js';
+import slackWebhook from '../webhooks/slack.js';
 
 const hnWeeklyPostBrain = brain({
   title: 'hn-weekly-post',

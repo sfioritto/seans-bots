@@ -5,7 +5,7 @@ const reviewResponseSchema = z.object({
   action: z.enum(['acknowledge', 'draft_response', 'dismiss']),
 });
 
-export const reviewEmailsWebhook = createWebhook(
+const reviewEmailsWebhook = createWebhook(
   'review-emails',
   reviewResponseSchema,
   async (request) => {
@@ -44,3 +44,5 @@ export const reviewEmailsWebhook = createWebhook(
     };
   }
 );
+
+export default reviewEmailsWebhook;

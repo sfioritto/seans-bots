@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { brain } from '../brain.js';
-import { archiveWebhook } from '../webhooks/archive.js';
+import archiveWebhook from '../webhooks/archive.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
 import type { ProcessedEmails, RawEmail, ChildrenEmailInfo, BillingEmailInfo } from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';

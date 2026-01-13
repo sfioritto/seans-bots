@@ -9,7 +9,8 @@
       "WebFetch(domain:developers.google.com)",
       "Bash(npm test:*)",
       "WebFetch(domain:docs.mercury.com)",
-      "WebFetch(domain:pypi.org)"
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:gist.github.com)"
     ],
     "deny": [],
     "ask": []

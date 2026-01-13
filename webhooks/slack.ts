@@ -4,7 +4,7 @@ import { z } from 'zod';
 // Generic Slack webhook response schema
 const slackWebhookSchema = z.any();
 
-export const slackWebhook = createWebhook(
+const slackWebhook = createWebhook(
   'slack',
   slackWebhookSchema,
   async (request) => {
@@ -89,3 +89,5 @@ export const slackWebhook = createWebhook(
     }
   }
 );
+
+export default slackWebhook;

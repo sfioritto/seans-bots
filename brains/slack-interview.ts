@@ -1,6 +1,6 @@
 import { brain } from '../brain.js';
 import { z } from 'zod';
-import { slackWebhook } from '../webhooks/slack.js';
+import slackWebhook from '../webhooks/slack.js';
 
 const SEAN_SLACK_ID = 'UDFFLKPM5';
 

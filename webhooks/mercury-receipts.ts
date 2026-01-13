@@ -10,7 +10,7 @@ const mercuryReceiptsSchema = z.object({
   mercuryEmailIds: z.array(z.string()),
 });
 
-export const mercuryReceiptsWebhook = createWebhook(
+const mercuryReceiptsWebhook = createWebhook(
   'mercury-receipts',
   mercuryReceiptsSchema,
   async (request) => {
@@ -45,3 +45,5 @@ export const mercuryReceiptsWebhook = createWebhook(
     };
   }
 );
+
+export default mercuryReceiptsWebhook;

@@ -6,7 +6,7 @@ const archiveSchema = z.object({
   confirmed: z.boolean(),
 });
 
-export const archiveWebhook = createWebhook(
+const archiveWebhook = createWebhook(
   'archive',
   archiveSchema,
   async (request) => {
@@ -42,3 +42,5 @@ export const archiveWebhook = createWebhook(
     };
   }
 );
+
+export default archiveWebhook;

@@ -1,7 +1,7 @@
 import { brain } from '../brain.js';
 import { z } from 'zod';
 import gmail from '../services/gmail.js';
-import { reviewEmailsWebhook } from '../webhooks/review-emails.js';
+import reviewEmailsWebhook from '../webhooks/review-emails.js';
 
 // Important senders to watch for
 const IMPORTANT_SENDERS = [
