@@ -5,7 +5,7 @@ import { VercelClient } from '@positronic/client-vercel';
 import mercuryReceiptsWebhook from '../webhooks/mercury-receipts.js';
 import { generateMercuryReceiptsPage } from './mercury-receipts/templates/confirmation-page.js';
 import type {
-  RawEmail,
+  RawThread,
   MercuryRequest,
   ReceiptCandidate,
   MercuryRequestWithMatches,
@@ -17,11 +17,11 @@ const google = createGoogleGenerativeAI({
 });
 const geminiClient = new VercelClient(google('gemini-3-pro-preview'));
 
-// Schema for identifying Mercury request emails and extracting details
+// Schema for identifying Mercury request threads and extracting details
 const mercuryIdentificationSchema = z.object({
   mercuryRequests: z.array(
     z.object({
-      emailId: z.string().describe('The Gmail message ID'),
+      threadId: z.string().describe('The Gmail thread ID'),
       isMercuryRequest: z.boolean().describe('Whether this is a Mercury receipt request'),
       amount: z.string().optional().describe('The dollar amount (e.g., "$200.00")'),
       merchant: z.string().optional().describe('The merchant name (e.g., "Anthropic")'),
@@ -33,10 +33,10 @@ const mercuryIdentificationSchema = z.object({
 const receiptMatchingSchema = z.object({
   matches: z.array(
     z.object({
-      mercuryRequestId: z.string().describe('The Mercury request email ID'),
+      mercuryRequestId: z.string().describe('The Mercury request thread ID'),
       candidateMatches: z.array(
         z.object({
-          emailId: z.string().describe('The receipt email ID'),
+          threadId: z.string().describe('The receipt thread ID'),
           merchant: z.string().describe('Merchant name from the receipt'),
           amount: z.string().describe('Amount from the receipt'),
           receiptDate: z.string().describe('Date of the receipt'),
@@ -52,7 +52,7 @@ const mercuryReceiptsBrain = brain({
   title: 'mercury-receipts',
   description: 'Matches Mercury bank receipt requests to emails and forwards them automatically',
 })
-  // Step 1: Search inbox for Mercury receipt request emails
+  // Step 1: Search inbox for Mercury receipt request threads
   .step('Search for Mercury receipt requests', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();
 
@@ -60,31 +60,33 @@ const mercuryReceiptsBrain = brain({
       console.log('No Gmail accounts configured');
       return {
         ...state,
-        mercuryEmails: [] as RawEmail[],
+        mercuryThreads: [] as RawThread[],
         allAccounts: [] as any[],
       };
     }
 
     console.log(`Searching ${accounts.length} accounts for Mercury receipt requests...`);
 
-    const mercuryEmails: RawEmail[] = [];
+    const mercuryThreads: RawThread[] = [];
     // Mercury sends emails from hello@mercury.com with "requires additional information" in subject
     // Only look for unread AND in inbox - if read or archived, assume receipt was already provided
     const query = 'from:hello@mercury.com subject:"requires additional information" is:unread label:inbox';
 
     for (const account of accounts) {
-      const messages = await gmail.searchMessages(account.refreshToken, query, 50);
-      console.log(`Found ${messages.length} Mercury requests in ${account.name}`);
+      const threads = await gmail.searchThreads(account.refreshToken, query, 50);
+      console.log(`Found ${threads.length} Mercury requests in ${account.name}`);
 
-      for (const message of messages) {
-        const details = await gmail.getMessageDetails(account.refreshToken, message.id);
-        mercuryEmails.push({
-          id: message.id,
+      for (const thread of threads) {
+        const details = await gmail.getThreadDetails(account.refreshToken, thread.threadId);
+        mercuryThreads.push({
+          threadId: thread.threadId,
           subject: details.subject,
           from: details.from,
           date: details.date,
           body: details.body.substring(0, 2000),
           snippet: details.snippet,
+          messageCount: details.messageCount,
+          messageIds: details.messageIds,
           accountName: account.name,
           refreshToken: account.refreshToken,
         });
@@ -94,33 +96,33 @@ const mercuryReceiptsBrain = brain({
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
-    console.log(`Found ${mercuryEmails.length} total Mercury receipt requests`);
+    console.log(`Found ${mercuryThreads.length} total Mercury receipt requests`);
 
     return {
       ...state,
-      mercuryEmails: mercuryEmails as any[],
+      mercuryThreads: mercuryThreads as any[],
       allAccounts: accounts as any[],
     };
   })
 
-  // Step 2: Use AI to extract amount/merchant from Mercury emails
+  // Step 2: Use AI to extract amount/merchant from Mercury threads
   .prompt('Extract Mercury request details', {
-    template: ({ mercuryEmails }) => {
-      const emails = mercuryEmails as any[];
+    template: ({ mercuryThreads }) => {
+      const threads = mercuryThreads as any[];
 
-      if (emails.length === 0) {
-        return 'No Mercury emails to analyze. Return an empty mercuryRequests array.';
+      if (threads.length === 0) {
+        return 'No Mercury threads to analyze. Return an empty mercuryRequests array.';
       }
 
-      const emailSummaries = emails
+      const threadSummaries = threads
         .map(
-          (e, i) => `
-Email ${i + 1}:
-ID: ${e.id}
-Subject: ${e.subject}
-From: ${e.from}
-Date: ${e.date}
-Body: ${e.body}
+          (t, i) => `
+Thread ${i + 1}:
+ID: ${t.threadId}
+Subject: ${t.subject}
+From: ${t.from}
+Date: ${t.date}
+Body: ${t.body}
 ---`
         )
         .join('\n');
@@ -131,13 +133,13 @@ Mercury sends emails when they need a receipt forwarded to receipts@mercury.com.
 The subject line is like: "Your transaction at Anthropic requires additional information"
 The body contains: "Your purchase of $200.00 at Anthropic: Requires a receipt, Requires a note"
 
-For each email, extract:
+For each thread, extract:
 - amount: The dollar amount from the body (e.g., "$200.00")
 - merchant: The merchant name from the subject or body (e.g., "Anthropic", "LATENT.SPACE/SWYX")
 
-${emailSummaries}
+${threadSummaries}
 
-Return the extracted details for each email. Set isMercuryRequest to true for valid receipt requests.`;
+Return the extracted details for each thread. Set isMercuryRequest to true for valid receipt requests.`;
     },
     outputSchema: {
       schema: mercuryIdentificationSchema,
@@ -147,20 +149,20 @@ Return the extracted details for each email. Set isMercuryRequest to true for va
 
   // Step 3: Process Mercury identification results
   .step('Process Mercury requests', ({ state }) => {
-    const emails = state.mercuryEmails as any[];
+    const threads = state.mercuryThreads as any[];
     const identification = state.mercuryIdentification;
 
     const mercuryRequests: MercuryRequest[] = identification.mercuryRequests
       .filter((r) => r.isMercuryRequest && r.amount && r.merchant)
       .map((r) => {
-        const rawEmail = emails.find((e) => e.id === r.emailId);
-        if (!rawEmail) return null;
+        const rawThread = threads.find((t) => t.threadId === r.threadId);
+        if (!rawThread) return null;
         return {
-          emailId: r.emailId,
-          rawEmail,
+          threadId: r.threadId,
+          rawThread,
           amount: r.amount!,
           merchant: r.merchant!,
-          requestDate: rawEmail.date,
+          requestDate: rawThread.date,
         };
       })
       .filter((r): r is MercuryRequest => r !== null);
@@ -170,7 +172,7 @@ Return the extracted details for each email. Set isMercuryRequest to true for va
     return { ...state, mercuryRequests: mercuryRequests as any[] };
   })
 
-  // Step 4: Search ALL emails for potential receipt matches
+  // Step 4: Search ALL threads for potential receipt matches
   .step('Search for receipt candidates', async ({ state, gmail }) => {
     const mercuryRequests = state.mercuryRequests as any[];
 
@@ -187,8 +189,8 @@ Return the extracted details for each email. Set isMercuryRequest to true for va
     const amounts = [...new Set(mercuryRequests.map((r) => r.amount.replace('$', '')))]; // Remove $ for search
     console.log(`Searching for receipts - merchants: ${merchants.join(', ')}, amounts: ${amounts.join(', ')}`);
 
-    // Get Mercury request IDs to exclude from results
-    const mercuryRequestIds = new Set(mercuryRequests.map((r) => r.emailId));
+    // Get Mercury request thread IDs to exclude from results
+    const mercuryRequestThreadIds = new Set(mercuryRequests.map((r) => r.threadId));
 
     for (const account of accounts) {
       // Build a broad OR query: (merchant1 OR merchant2 OR amount1 OR amount2) within last week
@@ -197,24 +199,26 @@ Return the extracted details for each email. Set isMercuryRequest to true for va
       const query = `(${searchTerms}) (receipt OR invoice OR payment OR order OR confirmation) newer_than:7d`;
       console.log(`Search query: ${query}`);
 
-      const messages = await gmail.searchMessages(account.refreshToken, query, 100);
-      console.log(`Found ${messages.length} potential matches in ${account.name}`);
+      const threads = await gmail.searchThreads(account.refreshToken, query, 100);
+      console.log(`Found ${threads.length} potential matches in ${account.name}`);
 
-      for (const message of messages) {
-        // Skip Mercury request emails themselves
-        if (mercuryRequestIds.has(message.id)) continue;
+      for (const thread of threads) {
+        // Skip Mercury request threads themselves
+        if (mercuryRequestThreadIds.has(thread.threadId)) continue;
 
         // Skip if we already have this candidate
-        if (receiptCandidates.some((c) => c.id === message.id)) continue;
+        if (receiptCandidates.some((c) => c.threadId === thread.threadId)) continue;
 
-        const details = await gmail.getMessageDetails(account.refreshToken, message.id);
+        const details = await gmail.getThreadDetails(account.refreshToken, thread.threadId);
         receiptCandidates.push({
-          id: message.id,
+          threadId: thread.threadId,
           subject: details.subject,
           from: details.from,
           date: details.date,
           body: details.body.substring(0, 3000),
           snippet: details.snippet,
+          messageCount: details.messageCount,
+          messageIds: details.messageIds,
           accountName: account.name,
           refreshToken: account.refreshToken,
         });
@@ -241,14 +245,14 @@ Return the extracted details for each email. Set isMercuryRequest to true for va
 
       if (candidates.length === 0) {
         return `No receipt candidates found. Return matches array with empty candidateMatches for each request:
-${requests.map((r) => `- mercuryRequestId: "${r.emailId}"`).join('\n')}`;
+${requests.map((r) => `- mercuryRequestId: "${r.threadId}"`).join('\n')}`;
       }
 
       const requestSummaries = requests
         .map(
           (r, i) => `
 Request ${i + 1}:
-ID: ${r.emailId}
+ID: ${r.threadId}
 Amount: ${r.amount}
 Merchant: ${r.merchant}
 Date: ${r.requestDate}
@@ -260,7 +264,7 @@ Date: ${r.requestDate}
         .map(
           (c, i) => `
 Candidate ${i + 1}:
-ID: ${c.id}
+ID: ${c.threadId}
 Subject: ${c.subject}
 From: ${c.from}
 Date: ${c.date}
@@ -304,15 +308,15 @@ Include ALL requests in the matches array, even those with no matches.`;
     const matching = state.receiptMatching;
 
     const requestsWithMatches: MercuryRequestWithMatches[] = requests.map((request) => {
-      const matchData = matching.matches.find((m) => m.mercuryRequestId === request.emailId);
+      const matchData = matching.matches.find((m) => m.mercuryRequestId === request.threadId);
 
       const matches: ReceiptCandidate[] = (matchData?.candidateMatches || [])
         .map((m) => {
-          const rawEmail = candidates.find((c) => c.id === m.emailId);
-          if (!rawEmail) return null;
+          const rawThread = candidates.find((c) => c.threadId === m.threadId);
+          if (!rawThread) return null;
           return {
-            emailId: m.emailId,
-            rawEmail,
+            threadId: m.threadId,
+            rawThread,
             merchant: m.merchant,
             amount: m.amount,
             receiptDate: m.receiptDate,
@@ -401,7 +405,7 @@ Include ALL requests in the matches array, even those with no matches.`;
     };
   })
 
-  // Step 10: Forward selected receipts and archive Mercury emails
+  // Step 10: Forward selected receipts and archive Mercury threads
   .step('Forward receipts and archive', async ({ state, response, gmail }) => {
     if (!state.sessionId) {
       console.log('No session to process');
@@ -412,7 +416,7 @@ Include ALL requests in the matches array, even those with no matches.`;
       | {
           selections: Array<{ mercuryRequestId: string; selectedReceiptId: string | null }>;
           confirmed: boolean;
-          mercuryEmailIds: string[];
+          mercuryThreadIds: string[];
         }
       | undefined;
 
@@ -431,15 +435,19 @@ Include ALL requests in the matches array, even those with no matches.`;
         continue;
       }
 
-      const request = requestsWithMatches.find((r) => r.request.emailId === selection.mercuryRequestId);
+      const request = requestsWithMatches.find((r) => r.request.threadId === selection.mercuryRequestId);
       if (!request) continue;
 
-      const match = request.matches.find((m) => m.emailId === selection.selectedReceiptId);
+      const match = request.matches.find((m) => m.threadId === selection.selectedReceiptId);
       if (!match) continue;
 
-      // Forward the receipt to Mercury
+      // Forward the latest message in the receipt thread to Mercury
+      // Use the first messageId (which is typically the latest message)
+      const messageIdToForward = match.rawThread.messageIds[0];
+      if (!messageIdToForward) continue;
+
       const note = `Receipt for ${request.request.merchant} - ${request.request.amount}`;
-      await gmail.forwardMessage(match.rawEmail.refreshToken, match.emailId, 'receipts@mercury.com', note);
+      await gmail.forwardMessage(match.rawThread.refreshToken, messageIdToForward, 'receipts@mercury.com', note);
 
       forwardedCount++;
       console.log(`Forwarded receipt for ${request.request.merchant} (${request.request.amount})`);
@@ -447,33 +455,34 @@ Include ALL requests in the matches array, even those with no matches.`;
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    // Archive the Mercury request emails
-    const mercuryEmails = state.mercuryEmails as RawEmail[];
-    const emailsByAccount: Record<string, { refreshToken: string; ids: string[] }> = {};
+    // Archive all messages in the Mercury request threads
+    const mercuryThreads = state.mercuryThreads as RawThread[];
+    const messagesByAccount: Record<string, { refreshToken: string; messageIds: string[] }> = {};
 
-    for (const emailId of webhookResponse.mercuryEmailIds) {
-      const email = mercuryEmails.find((e) => e.id === emailId);
-      if (!email) continue;
+    for (const threadId of webhookResponse.mercuryThreadIds) {
+      const thread = mercuryThreads.find((t) => t.threadId === threadId);
+      if (!thread) continue;
 
-      if (!emailsByAccount[email.accountName]) {
-        emailsByAccount[email.accountName] = {
-          refreshToken: email.refreshToken,
-          ids: [],
+      if (!messagesByAccount[thread.accountName]) {
+        messagesByAccount[thread.accountName] = {
+          refreshToken: thread.refreshToken,
+          messageIds: [],
         };
       }
-      emailsByAccount[email.accountName].ids.push(emailId);
+      // Add all message IDs from this thread
+      messagesByAccount[thread.accountName].messageIds.push(...thread.messageIds);
     }
 
     let archivedCount = 0;
-    for (const [accountName, { refreshToken, ids }] of Object.entries(emailsByAccount)) {
+    for (const [accountName, { refreshToken, messageIds }] of Object.entries(messagesByAccount)) {
       // Mark as read first, then archive
-      await gmail.markAsRead(refreshToken, ids);
-      await gmail.archiveMessages(refreshToken, ids);
-      archivedCount += ids.length;
-      console.log(`Marked read and archived ${ids.length} Mercury request emails from ${accountName}`);
+      await gmail.markAsRead(refreshToken, messageIds);
+      await gmail.archiveMessages(refreshToken, messageIds);
+      archivedCount += messageIds.length;
+      console.log(`Marked read and archived ${messageIds.length} Mercury request messages from ${accountName}`);
     }
 
-    console.log(`Successfully forwarded ${forwardedCount} receipts, archived ${archivedCount} Mercury emails`);
+    console.log(`Successfully forwarded ${forwardedCount} receipts, archived ${archivedCount} Mercury messages`);
 
     return {
       ...state,

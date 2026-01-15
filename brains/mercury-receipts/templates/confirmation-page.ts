@@ -9,8 +9,8 @@ export function generateMercuryReceiptsPage(
   const withMatches = requestsWithMatches.filter(r => r.matches.length > 0).length;
   const noMatches = totalRequests - withMatches;
 
-  // Collect all Mercury email IDs for archiving
-  const allMercuryEmailIds = requestsWithMatches.map(r => r.request.emailId);
+  // Collect all Mercury thread IDs for archiving
+  const allMercuryThreadIds = requestsWithMatches.map(r => r.request.threadId);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -161,7 +161,7 @@ export function generateMercuryReceiptsPage(
 
   <form id="receipts-form" action="${webhookUrl}" method="POST">
     <input type="hidden" name="sessionId" value="${sessionId}">
-    <input type="hidden" name="mercuryEmailIds" value='${JSON.stringify(allMercuryEmailIds)}'>
+    <input type="hidden" name="mercuryThreadIds" value='${JSON.stringify(allMercuryThreadIds)}'>
 
     ${requestsWithMatches.map((item, index) => `
       <div class="request-card">
@@ -179,8 +179,8 @@ export function generateMercuryReceiptsPage(
               <label class="match-option ${mi === 0 ? 'selected' : ''}">
                 <input type="radio"
                        name="selection_${index}"
-                       value="${match.emailId}"
-                       data-request-id="${item.request.emailId}"
+                       value="${match.threadId}"
+                       data-request-id="${item.request.threadId}"
                        ${mi === 0 ? 'checked' : ''}>
                 <span class="match-info">
                   <span class="match-merchant">${escapeHtml(match.merchant)}</span>
@@ -190,7 +190,7 @@ export function generateMercuryReceiptsPage(
                   <div class="match-details">
                     ${escapeHtml(match.amount)} - ${escapeHtml(match.receiptDate)}
                   </div>
-                  <div class="match-subject">${escapeHtml(match.rawEmail.subject)}</div>
+                  <div class="match-subject">${escapeHtml(match.rawThread.subject)}</div>
                   <div class="match-reason">${escapeHtml(match.matchReason)}</div>
                 </span>
               </label>
@@ -201,7 +201,7 @@ export function generateMercuryReceiptsPage(
             <input type="radio"
                    name="selection_${index}"
                    value=""
-                   data-request-id="${item.request.emailId}"
+                   data-request-id="${item.request.threadId}"
                    ${item.matches.length === 0 ? 'checked' : ''}>
             <span class="match-info">
               ${item.matches.length === 0

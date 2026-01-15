@@ -5,20 +5,15 @@ import type { gmail_v1 } from 'googleapis';
  * Gmail service for reading emails from multiple accounts
  */
 
-interface GmailMessage {
-  id: string;
-  threadId: string;
-  snippet: string;
-}
-
-interface GmailMessageDetails {
-  id: string;
+interface GmailThread {
   threadId: string;
   subject: string;
   from: string;
   date: string;
   body: string;
   snippet: string;
+  messageCount: number;
+  messageIds: string[];
 }
 
 interface GmailAccount {
@@ -281,54 +276,66 @@ function getHeader(headers: gmail_v1.Schema$MessagePartHeader[] | undefined, nam
 }
 
 /**
- * Search for messages in a Gmail account
+ * Search for threads in a Gmail account
  */
-async function searchMessages(
+async function searchThreads(
   refreshToken: string,
   query: string = 'is:unread',
   maxResults: number = 100
-): Promise<GmailMessage[]> {
+): Promise<{ threadId: string }[]> {
   const gmail = createGmailClient(refreshToken);
 
-  const response = await gmail.users.messages.list({
+  const response = await gmail.users.threads.list({
     userId: 'me',
     q: query,
     maxResults
   });
 
-  return (response.data.messages || []).map(msg => ({
-    id: msg.id || '',
-    threadId: msg.threadId || '',
-    snippet: ''
+  return (response.data.threads || []).map(thread => ({
+    threadId: thread.id || ''
   }));
 }
 
 /**
- * Get full details of a specific message
+ * Get full details of a thread (returns latest message details + all message IDs)
  */
-async function getMessageDetails(
+async function getThreadDetails(
   refreshToken: string,
-  messageId: string
-): Promise<GmailMessageDetails> {
+  threadId: string
+): Promise<GmailThread> {
   const gmail = createGmailClient(refreshToken);
 
-  const response = await gmail.users.messages.get({
+  const response = await gmail.users.threads.get({
     userId: 'me',
-    id: messageId,
+    id: threadId,
     format: 'full'
   });
 
-  const message = response.data;
-  const headers = message.payload?.headers;
+  const thread = response.data;
+  const messages = thread.messages || [];
+
+  // Collect all message IDs
+  const messageIds = messages.map(msg => msg.id || '').filter(Boolean);
+
+  // Sort messages by internalDate to find the latest
+  const sortedMessages = [...messages].sort((a, b) => {
+    const dateA = parseInt(a.internalDate || '0', 10);
+    const dateB = parseInt(b.internalDate || '0', 10);
+    return dateB - dateA;
+  });
+
+  const latestMessage = sortedMessages[0];
+  const headers = latestMessage?.payload?.headers;
 
   return {
-    id: message.id || '',
-    threadId: message.threadId || '',
+    threadId: thread.id || '',
     subject: getHeader(headers, 'Subject'),
     from: getHeader(headers, 'From'),
     date: getHeader(headers, 'Date'),
-    body: extractBody(message.payload),
-    snippet: message.snippet || ''
+    body: extractBody(latestMessage?.payload),
+    snippet: latestMessage?.snippet || '',
+    messageCount: messages.length,
+    messageIds
   };
 }
 
@@ -537,14 +544,14 @@ export const gmail = {
   getAccounts: getConfiguredAccounts,
 
   /**
-   * Search for messages in a specific account
+   * Search for threads in a specific account
    */
-  searchMessages,
+  searchThreads,
 
   /**
-   * Get full details of a message
+   * Get full details of a thread (latest message + all message IDs)
    */
-  getMessageDetails,
+  getThreadDetails,
 
   /**
    * Archive messages by removing from inbox
@@ -565,28 +572,6 @@ export const gmail = {
    * Forward an email message to a recipient
    */
   forwardMessage,
-
-  /**
-   * Search across all configured accounts
-   */
-  searchAllAccounts: async (query: string = 'is:unread', maxResults: number = 100) => {
-    const accounts = getConfiguredAccounts();
-    const results = [];
-
-    for (const account of accounts) {
-      const messages = await searchMessages(account.refreshToken, query, maxResults);
-      results.push({
-        account: account.name,
-        messageCount: messages.length,
-        messages
-      });
-
-      // Small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    return results;
-  }
 };
 
 export default gmail;

@@ -7,7 +7,7 @@ const mercuryReceiptsSchema = z.object({
     selectedReceiptId: z.string().nullable(),
   })),
   confirmed: z.boolean(),
-  mercuryEmailIds: z.array(z.string()),
+  mercuryThreadIds: z.array(z.string()),
 });
 
 const mercuryReceiptsWebhook = createWebhook(
@@ -25,14 +25,14 @@ const mercuryReceiptsWebhook = createWebhook(
 
     const sessionId = params.get('sessionId');
     const selectionsJson = params.get('selections');
-    const mercuryEmailIdsJson = params.get('mercuryEmailIds');
+    const mercuryThreadIdsJson = params.get('mercuryThreadIds');
 
     if (!sessionId) {
       throw new Error('Missing sessionId in form data');
     }
 
     const selections = selectionsJson ? JSON.parse(selectionsJson) : [];
-    const mercuryEmailIds = mercuryEmailIdsJson ? JSON.parse(mercuryEmailIdsJson) : [];
+    const mercuryThreadIds = mercuryThreadIdsJson ? JSON.parse(mercuryThreadIdsJson) : [];
 
     return {
       type: 'webhook' as const,
@@ -40,7 +40,7 @@ const mercuryReceiptsWebhook = createWebhook(
       response: {
         selections,
         confirmed: true,
-        mercuryEmailIds,
+        mercuryThreadIds,
       },
     };
   }

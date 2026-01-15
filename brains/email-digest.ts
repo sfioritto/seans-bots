@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { brain } from '../brain.js';
 import archiveWebhook from '../webhooks/archive.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
-import type { ProcessedEmails, RawEmail, ChildrenEmailInfo, BillingEmailInfo } from './email-digest/types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo } from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';
 
 // Helper for retry with exponential backoff
@@ -57,14 +57,14 @@ const npmSummarySchema = z.object({
   summary: z.string().describe('Concise summary of packages published with their versions, e.g. "@positronic/shell: v0.0.50, v0.0.51; @positronic/core: v1.2.3"'),
 });
 
-function buildCategorizationPrompt(email: RawEmail): string {
+function buildCategorizationPrompt(thread: RawThread): string {
   return `I am Sean Fioritto. My wife is Beth Fioritto. Her most common email address is beth.lukes@gmail.com. The emails you are reading are from my inbox. My kids are Isaac and Ada.
 
   Categorize this email into exactly ONE category. Choose the BEST fit.
 
-From: ${email.from}
-Subject: ${email.subject}
-Body: ${email.body}
+From: ${thread.from}
+Subject: ${thread.subject}
+Body: ${thread.body}
 
 Categories (pick ONE):
 - children: Emails about MY kids, so Ada and Isaac (school, activities, camps, health, sports, choir, etc.)
@@ -74,39 +74,39 @@ Categories (pick ONE):
 - kickstarter: Kickstarter, Indiegogo, crowdfunding updates
 - newsletters: Newsletter subscriptions, periodic digests
 - marketing: Marketing emails, promotions, sales, ads
-- notifications: System notifications, product updates, policy changes, announcements
+- notifications: System notifications, product updates, policy changes, announcements. Notifications are of little value and should not be from clients, customers, friends, family, etc.
 - npm: NPM package publish notifications from npmjs.com, npm registry emails
 - Uncategorized: If it's not a great fit in any of the other categories, put it here.
 
 Think about what this email is PRIMARILY about, then choose the single best category.`;
 }
 
-function buildChildrenEnrichmentPrompt(email: RawEmail): string {
+function buildChildrenEnrichmentPrompt(thread: RawThread): string {
   return `Analyze this email about children/kids activities.
 
-From: ${email.from}
-Subject: ${email.subject}
-Body: ${email.body}
+From: ${thread.from}
+Subject: ${thread.subject}
+Body: ${thread.body}
 
 Provide:
 1. A one-sentence summary of what this email is about
 2. If there's an action item the parent needs to do (sign up, pay, respond, bring something, etc.), describe it. If no action needed, return null.`;
 }
 
-function buildBillingEnrichmentPrompt(email: RawEmail): string {
+function buildBillingEnrichmentPrompt(thread: RawThread): string {
   return `Analyze this billing/payment email.
 
-From: ${email.from}
-Subject: ${email.subject}
-Body: ${email.body.substring(0, 1500)}
+From: ${thread.from}
+Subject: ${thread.subject}
+Body: ${thread.body.substring(0, 1500)}
 
 Provide:
 1. Brief description of what this bill or payment is for
 2. The dollar amount if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.`;
 }
 
-function buildNpmSummaryPrompt(emails: RawEmail[]): string {
-  const emailBodies = emails.map(e => `Subject: ${e.subject}\nBody: ${e.body.substring(0, 500)}`).join('\n\n---\n\n');
+function buildNpmSummaryPrompt(threads: RawThread[]): string {
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
   return `Here are NPM package publish notifications. Summarize which packages were published and what versions.
 
 Group by package name. If the same package has multiple versions published, list all versions together.
@@ -114,7 +114,7 @@ Format: "@scope/package: v1.0.0, v1.0.1; @scope/other: v2.0.0"
 
 Keep it concise - just package names and versions, nothing else.
 
-${emailBodies}`;
+${threadBodies}`;
 }
 
 const emailDigestBrain = brain({
@@ -132,23 +132,25 @@ const emailDigestBrain = brain({
     () => ({})
   )
 
-  .step('Fetch all inbox emails from all accounts', async ({ state, gmail }) => {
+  .step('Fetch all inbox threads from all accounts', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();
-    const emailsById: Record<string, RawEmail> = {};
+    const threadsById: Record<string, RawThread> = {};
     const query = 'label:inbox';
 
     for (const account of accounts) {
-      const messages = await gmail.searchMessages(account.refreshToken, query, 100);
+      const threads = await gmail.searchThreads(account.refreshToken, query, 100);
 
-      for (const message of messages) {
-        const details = await gmail.getMessageDetails(account.refreshToken, message.id);
-        emailsById[message.id] = {
-          id: message.id,
+      for (const thread of threads) {
+        const details = await gmail.getThreadDetails(account.refreshToken, thread.threadId);
+        threadsById[thread.threadId] = {
+          threadId: thread.threadId,
           subject: details.subject,
           from: details.from,
           date: details.date,
           body: details.body.substring(0, 2000),
           snippet: details.snippet,
+          messageCount: details.messageCount,
+          messageIds: details.messageIds,
           accountName: account.name,
           refreshToken: account.refreshToken,
         };
@@ -160,7 +162,7 @@ const emailDigestBrain = brain({
 
     return {
       ...state,
-      emailsById,
+      threadsById,
       children: [] as string[],
       amazon: [] as string[],
       billing: [] as string[],
@@ -176,11 +178,11 @@ const emailDigestBrain = brain({
     } as any;
   })
 
-  .step('Categorize all emails', async ({ state, client }) => {
-    const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
-    const emailEntries = Object.entries(emailsById);
+  .step('Categorize all threads', async ({ state, client }) => {
+    const threadsById = state.threadsById as unknown as Record<string, RawThread>;
+    const threadEntries = Object.entries(threadsById);
 
-    if (emailEntries.length === 0) {
+    if (threadEntries.length === 0) {
       return state;
     }
 
@@ -198,26 +200,26 @@ const emailDigestBrain = brain({
 
     const BATCH_SIZE = 20;
 
-    for (let i = 0; i < emailEntries.length; i += BATCH_SIZE) {
-      const batch = emailEntries.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < threadEntries.length; i += BATCH_SIZE) {
+      const batch = threadEntries.slice(i, i + BATCH_SIZE);
 
-      const promises = batch.map(async ([id, email], idx) => {
+      const promises = batch.map(async ([threadId, thread], idx) => {
         await new Promise((resolve) => setTimeout(resolve, idx * 30));
         const result = await withRetry(() =>
           client.generateObject({
-            prompt: buildCategorizationPrompt(email),
+            prompt: buildCategorizationPrompt(thread),
             schema: categorySchema,
             schemaName: 'emailCategory',
           })
         );
-        return { id, category: result.category };
+        return { threadId, category: result.category };
       });
 
       const results = await Promise.all(promises);
 
-      for (const { id, category } of results) {
+      for (const { threadId, category } of results) {
         if (categories[category]) {
-          categories[category].push(id);
+          categories[category].push(threadId);
         }
       }
     }
@@ -228,8 +230,8 @@ const emailDigestBrain = brain({
     } as any;
   })
 
-  .step('Enrich children, billing, and npm emails', async ({ state, client }) => {
-    const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
+  .step('Enrich children, billing, and npm threads', async ({ state, client }) => {
+    const threadsById = state.threadsById as unknown as Record<string, RawThread>;
     const childrenIds = state.children as unknown as string[];
     const billingIds = state.billing as unknown as string[];
     const npmIds = state.npm as unknown as string[];
@@ -238,42 +240,42 @@ const emailDigestBrain = brain({
     const billingInfo: Record<string, BillingEmailInfo> = {};
     let npmSummary = '';
 
-    // Enrich children emails
-    for (const id of childrenIds) {
-      const email = emailsById[id];
-      if (!email) continue;
+    // Enrich children threads
+    for (const threadId of childrenIds) {
+      const thread = threadsById[threadId];
+      if (!thread) continue;
 
       const result = await withRetry(() =>
         client.generateObject({
-          prompt: buildChildrenEnrichmentPrompt(email),
+          prompt: buildChildrenEnrichmentPrompt(thread),
           schema: childrenEnrichmentSchema,
           schemaName: 'childrenEmailInfo',
         })
       );
-      childrenInfo[id] = result;
+      childrenInfo[threadId] = result;
     }
 
-    // Enrich billing emails
-    for (const id of billingIds) {
-      const email = emailsById[id];
-      if (!email) continue;
+    // Enrich billing threads
+    for (const threadId of billingIds) {
+      const thread = threadsById[threadId];
+      if (!thread) continue;
 
       const result = await withRetry(() =>
         client.generateObject({
-          prompt: buildBillingEnrichmentPrompt(email),
+          prompt: buildBillingEnrichmentPrompt(thread),
           schema: billingEnrichmentSchema,
           schemaName: 'billingEmailInfo',
         })
       );
-      billingInfo[id] = result;
+      billingInfo[threadId] = result;
     }
 
     // Generate npm summary
     if (npmIds.length > 0) {
-      const npmEmails = npmIds.map(id => emailsById[id]).filter(Boolean);
+      const npmThreads = npmIds.map(threadId => threadsById[threadId]).filter(Boolean);
       const result = await withRetry(() =>
         client.generateObject({
-          prompt: buildNpmSummaryPrompt(npmEmails),
+          prompt: buildNpmSummaryPrompt(npmThreads),
           schema: npmSummarySchema,
           schemaName: 'npmSummary',
         })
@@ -292,7 +294,7 @@ const emailDigestBrain = brain({
   .step('Generate unified summary page', async ({ state, pages, env }) => {
     const s = state as any;
     const processedData: ProcessedEmails = {
-      emailsById: s.emailsById,
+      threadsById: s.threadsById,
       children: s.children as string[],
       amazon: s.amazon as string[],
       billing: s.billing as string[],
@@ -387,37 +389,39 @@ const emailDigestBrain = brain({
     };
   })
 
-  .step('Archive emails', async ({ state, response, gmail }) => {
+  .step('Archive threads', async ({ state, response, gmail }) => {
     if (!(state as any).sessionId) {
       return { ...state, archived: false, archivedCount: 0 };
     }
 
-    const webhookResponse = response as { emailIds: string[]; confirmed: boolean } | undefined;
+    const webhookResponse = response as { threadIds: string[]; confirmed: boolean } | undefined;
 
     if (!webhookResponse?.confirmed) {
       return { ...state, archived: false, archivedCount: 0 };
     }
 
-    const selectedEmailIds = new Set(webhookResponse.emailIds);
-    const emailsById = (state as any).emailsById as Record<string, RawEmail>;
+    const selectedThreadIds = new Set(webhookResponse.threadIds);
+    const threadsById = (state as any).threadsById as Record<string, RawThread>;
 
-    const emailsByAccount: Record<string, { refreshToken: string; emailIds: string[] }> = {};
+    // Group all message IDs by account for archiving
+    const messagesByAccount: Record<string, { refreshToken: string; messageIds: string[] }> = {};
 
-    for (const emailId of selectedEmailIds) {
-      const email = emailsById[emailId];
-      if (email) {
-        const key = email.accountName;
-        if (!emailsByAccount[key]) {
-          emailsByAccount[key] = { refreshToken: email.refreshToken, emailIds: [] };
+    for (const threadId of selectedThreadIds) {
+      const thread = threadsById[threadId];
+      if (thread) {
+        const key = thread.accountName;
+        if (!messagesByAccount[key]) {
+          messagesByAccount[key] = { refreshToken: thread.refreshToken, messageIds: [] };
         }
-        emailsByAccount[key].emailIds.push(emailId);
+        // Add all message IDs from this thread
+        messagesByAccount[key].messageIds.push(...thread.messageIds);
       }
     }
 
     let totalArchived = 0;
-    for (const [, { refreshToken, emailIds }] of Object.entries(emailsByAccount)) {
-      await gmail.archiveMessages(refreshToken, emailIds);
-      totalArchived += emailIds.length;
+    for (const [, { refreshToken, messageIds }] of Object.entries(messagesByAccount)) {
+      await gmail.archiveMessages(refreshToken, messageIds);
+      totalArchived += messageIds.length;
     }
 
     return {

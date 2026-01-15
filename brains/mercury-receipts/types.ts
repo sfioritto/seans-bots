@@ -1,20 +1,22 @@
 // Types for mercury-receipts brain
 
-export interface RawEmail {
-  id: string;
+export interface RawThread {
+  threadId: string;
   subject: string;
   from: string;
   date: string;
   body: string;
   snippet: string;
+  messageCount: number;
+  messageIds: string[];
   accountName: string;
   refreshToken: string;
 }
 
-// Mercury receipt request from email
+// Mercury receipt request from email thread
 export interface MercuryRequest {
-  emailId: string;
-  rawEmail: RawEmail;
+  threadId: string;
+  rawThread: RawThread;
   amount: string;        // e.g., "$200.00"
   merchant: string;      // e.g., "Anthropic"
   requestDate: string;   // Date of Mercury email
@@ -22,8 +24,8 @@ export interface MercuryRequest {
 
 // Potential receipt match found in email archive
 export interface ReceiptCandidate {
-  emailId: string;
-  rawEmail: RawEmail;
+  threadId: string;
+  rawThread: RawThread;
   merchant: string;      // Extracted merchant name
   amount: string;        // Amount from receipt
   receiptDate: string;   // Date on receipt
@@ -42,7 +44,7 @@ export interface MercuryReceiptsWebhookResponse {
   confirmed: boolean;
   selections: Array<{
     mercuryRequestId: string;
-    selectedReceiptId: string | null;  // null = skip
+    selectedReceiptId: string | null;  // null = skip (now threadId)
   }>;
-  mercuryEmailIds: string[];  // IDs to archive after forwarding
+  mercuryThreadIds: string[];  // Thread IDs to archive after forwarding
 }

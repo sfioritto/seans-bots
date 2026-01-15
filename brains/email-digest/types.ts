@@ -1,12 +1,14 @@
 // Shared types for email-digest brain
 
-export interface RawEmail {
-  id: string;
+export interface RawThread {
+  threadId: string;
   subject: string;
   from: string;
   date: string;
   body: string;
   snippet: string;
+  messageCount: number;
+  messageIds: string[];
   accountName: string;
   refreshToken: string;
 }
@@ -22,9 +24,9 @@ export interface BillingEmailInfo {
   amount: string | null;
 }
 
-// Categories are arrays of email IDs, with optional enrichment data
+// Categories are arrays of thread IDs, with optional enrichment data
 export interface ProcessedEmails {
-  emailsById: Record<string, RawEmail>;
+  threadsById: Record<string, RawThread>;
   children: string[];
   amazon: string[];
   billing: string[];
@@ -34,7 +36,7 @@ export interface ProcessedEmails {
   marketing: string[];
   notifications: string[];
   npm: string[];
-  // Enrichment data keyed by email ID
+  // Enrichment data keyed by thread ID
   childrenInfo: Record<string, ChildrenEmailInfo>;
   billingInfo: Record<string, BillingEmailInfo>;
   npmSummary?: string;

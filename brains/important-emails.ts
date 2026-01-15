@@ -25,23 +25,23 @@ const importantEmailsBrain = brain({
   title: 'important-emails',
   description: 'Scans all email accounts to find important emails from key contacts or with today\'s deadlines',
 })
-  // Step 1: Fetch emails from all accounts
-  .step('Fetch emails from all accounts', async ({ state }) => {
+  // Step 1: Fetch threads from all accounts
+  .step('Fetch threads from all accounts', async ({ state }) => {
     const accounts = gmail.getAccounts();
 
     if (accounts.length === 0) {
       console.log('No Gmail accounts configured');
       return {
         ...state,
-        emails: [],
+        threads: [],
         accountInfo: [],
       };
     }
 
-    console.log(`Fetching emails from ${accounts.length} accounts...`);
+    console.log(`Fetching threads from ${accounts.length} accounts...`);
 
-    const emails: Array<{
-      id: string;
+    const threads: Array<{
+      threadId: string;
       accountIndex: number;
       accountName: string;
       subject: string;
@@ -49,6 +49,7 @@ const importantEmailsBrain = brain({
       date: string;
       snippet: string;
       body: string;
+      messageIds: string[];
     }> = [];
 
     const accountInfo: Array<{ index: number; name: string; refreshToken: string }> = [];
@@ -61,14 +62,14 @@ const importantEmailsBrain = brain({
         refreshToken: account.refreshToken,
       });
 
-      // Get recent inbox emails
-      const messages = await gmail.searchMessages(account.refreshToken, 'label:inbox', 50);
-      console.log(`Found ${messages.length} emails in ${account.name}`);
+      // Get recent inbox threads
+      const threadResults = await gmail.searchThreads(account.refreshToken, 'label:inbox', 50);
+      console.log(`Found ${threadResults.length} threads in ${account.name}`);
 
-      for (const message of messages) {
-        const details = await gmail.getMessageDetails(account.refreshToken, message.id);
-        emails.push({
-          id: message.id,
+      for (const thread of threadResults) {
+        const details = await gmail.getThreadDetails(account.refreshToken, thread.threadId);
+        threads.push({
+          threadId: thread.threadId,
           accountIndex: i,
           accountName: account.name,
           subject: details.subject,
@@ -76,6 +77,7 @@ const importantEmailsBrain = brain({
           date: details.date,
           snippet: details.snippet,
           body: details.body.substring(0, 3000), // Limit body size
+          messageIds: details.messageIds,
         });
 
         // Small delay to avoid rate limiting
@@ -86,20 +88,20 @@ const importantEmailsBrain = brain({
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
 
-    console.log(`Total emails to scan: ${emails.length}`);
+    console.log(`Total threads to scan: ${threads.length}`);
 
     return {
       ...state,
-      emails,
+      threads,
       accountInfo,
       todayDate: getTodayDateString(),
     };
   })
 
-  // Step 2: Use a loop to let the LLM analyze emails and find important ones
-  .loop('Find important emails', ({ state, ntfy, pages, env }) => {
-    const emails = (state.emails || []) as Array<{
-      id: string;
+  // Step 2: Use a loop to let the LLM analyze threads and find important ones
+  .loop('Find important threads', ({ state, ntfy, pages, env }) => {
+    const threads = (state.threads || []) as Array<{
+      threadId: string;
       accountIndex: number;
       accountName: string;
       subject: string;
@@ -107,19 +109,20 @@ const importantEmailsBrain = brain({
       date: string;
       snippet: string;
       body: string;
+      messageIds: string[];
     }>;
 
     const todayDate = state.todayDate as string;
 
-    // Build a summary of all emails for the LLM
-    const emailSummaries = emails.map((email, index) => ({
+    // Build a summary of all threads for the LLM
+    const threadSummaries = threads.map((thread, index) => ({
       index,
-      id: email.id,
-      account: email.accountName,
-      from: email.from,
-      subject: email.subject,
-      date: email.date,
-      snippet: email.snippet,
+      threadId: thread.threadId,
+      account: thread.accountName,
+      from: thread.from,
+      subject: thread.subject,
+      date: thread.date,
+      snippet: thread.snippet,
     }));
 
     return {
@@ -136,62 +139,62 @@ An email is IMPORTANT if:
 
 Your job is to review the email list and identify which ones are important.`,
 
-      prompt: `Here are the emails to analyze:
+      prompt: `Here are the email threads to analyze:
 
-${JSON.stringify(emailSummaries, null, 2)}
+${JSON.stringify(threadSummaries, null, 2)}
 
-Please analyze each email and use the tools to:
-1. Use "get_email_details" if you need to see the full body of an email to determine if it has a deadline today
-2. Use "mark_important" for each email you determine is important, providing a reason
-3. After finding important emails, use "escalate_for_review" to pause and let the user review them
+Please analyze each thread and use the tools to:
+1. Use "get_thread_details" if you need to see the full body of a thread to determine if it has a deadline today
+2. Use "mark_important" for each thread you determine is important, providing a reason
+3. After finding important threads, use "escalate_for_review" to pause and let the user review them
 4. After the user responds (you'll receive their action as a tool result):
-   - If action is "draft_response": Use "draft_response" for each important email to draft a reply, then use "finish"
+   - If action is "draft_response": Use "draft_response" for each important thread to draft a reply, then use "finish"
    - If action is "acknowledge" or "dismiss": Use "finish" directly
 
-IMPORTANT: If you find any important emails, you MUST use "escalate_for_review" before finishing. This pauses the workflow and waits for user confirmation.
+IMPORTANT: If you find any important threads, you MUST use "escalate_for_review" before finishing. This pauses the workflow and waits for user confirmation.
 
 Start by scanning the sender names for matches with the important senders list, then check subjects/snippets for deadline mentions.`,
 
       tools: {
-        get_email_details: {
-          description: 'Get the full body of an email to check for deadline mentions',
+        get_thread_details: {
+          description: 'Get the full body of a thread to check for deadline mentions',
           inputSchema: z.object({
-            emailIndex: z.number().describe('Index of the email in the list'),
+            threadIndex: z.number().describe('Index of the thread in the list'),
           }),
-          execute: async (input: { emailIndex: number }) => {
-            const email = emails[input.emailIndex];
-            if (!email) {
-              return { error: 'Email not found' };
+          execute: async (input: { threadIndex: number }) => {
+            const thread = threads[input.threadIndex];
+            if (!thread) {
+              return { error: 'Thread not found' };
             }
             return {
-              index: input.emailIndex,
-              from: email.from,
-              subject: email.subject,
-              date: email.date,
-              body: email.body,
+              index: input.threadIndex,
+              from: thread.from,
+              subject: thread.subject,
+              date: thread.date,
+              body: thread.body,
             };
           },
         },
 
         mark_important: {
-          description: 'Mark an email as important with a reason',
+          description: 'Mark a thread as important with a reason',
           inputSchema: z.object({
-            emailIndex: z.number().describe('Index of the email in the list'),
-            reason: z.string().describe('Why this email is important (sender match or deadline today)'),
+            threadIndex: z.number().describe('Index of the thread in the list'),
+            reason: z.string().describe('Why this thread is important (sender match or deadline today)'),
           }),
-          execute: async (input: { emailIndex: number; reason: string }) => {
-            const email = emails[input.emailIndex];
-            if (!email) {
-              return { error: 'Email not found' };
+          execute: async (input: { threadIndex: number; reason: string }) => {
+            const thread = threads[input.threadIndex];
+            if (!thread) {
+              return { error: 'Thread not found' };
             }
             return {
               marked: true,
-              email: {
-                id: email.id,
-                account: email.accountName,
-                from: email.from,
-                subject: email.subject,
-                date: email.date,
+              thread: {
+                threadId: thread.threadId,
+                account: thread.accountName,
+                from: thread.from,
+                subject: thread.subject,
+                date: thread.date,
               },
               reason: input.reason,
             };
@@ -199,27 +202,27 @@ Start by scanning the sender names for matches with the important senders list, 
         },
 
         escalate_for_review: {
-          description: 'When you have found important emails, use this tool to escalate them to the user for review. The loop will pause and wait for the user to respond via webhook before continuing.',
+          description: 'When you have found important threads, use this tool to escalate them to the user for review. The loop will pause and wait for the user to respond via webhook before continuing.',
           inputSchema: z.object({
-            importantEmailIndices: z.array(z.number()).describe('Indices of the important emails found'),
+            importantThreadIndices: z.array(z.number()).describe('Indices of the important threads found'),
             summary: z.string().describe('Brief summary for the user about what was found'),
           }),
-          execute: async (input: { importantEmailIndices: number[]; summary: string }) => {
+          execute: async (input: { importantThreadIndices: number[]; summary: string }) => {
             // Generate a unique session ID for this review
             const sessionId = crypto.randomUUID();
 
-            // Build the list of important emails for the page
-            const importantEmails = input.importantEmailIndices.map((idx) => {
-              const email = emails[idx];
-              return email ? {
-                from: email.from,
-                subject: email.subject,
-                date: email.date,
-                snippet: email.snippet,
+            // Build the list of important threads for the page
+            const importantThreads = input.importantThreadIndices.map((idx) => {
+              const thread = threads[idx];
+              return thread ? {
+                from: thread.from,
+                subject: thread.subject,
+                date: thread.date,
+                snippet: thread.snippet,
               } : null;
             }).filter(Boolean);
 
-            console.log(`\n📧 Escalating ${importantEmails.length} important emails for review`);
+            console.log(`\n📧 Escalating ${importantThreads.length} important threads for review`);
             console.log(`Session ID: ${sessionId}`);
             console.log(input.summary);
 
@@ -258,12 +261,12 @@ Start by scanning the sender names for matches with the important senders list, 
   <h1>📧 Important Emails Found</h1>
   <div class="summary">${input.summary}</div>
 
-  ${importantEmails.map(email => `
+  ${importantThreads.map(thread => `
   <div class="card">
-    <div class="email-from">${email?.from}</div>
-    <div class="email-subject">${email?.subject}</div>
-    <div class="email-snippet">${email?.snippet}</div>
-    <div class="email-date">${email?.date}</div>
+    <div class="email-from">${thread?.from}</div>
+    <div class="email-subject">${thread?.subject}</div>
+    <div class="email-snippet">${thread?.snippet}</div>
+    <div class="email-date">${thread?.date}</div>
   </div>
   `).join('')}
 
@@ -291,14 +294,14 @@ Start by scanning the sender names for matches with the important senders list, 
             const pageUrl = `${env.origin}/pages/${slug}`;
 
             // Send notification with link to the page
-            const notificationMessage = `📧 ${importantEmails.length} important email(s) found! Tap to review.`;
+            const notificationMessage = `📧 ${importantThreads.length} important thread(s) found! Tap to review.`;
             await ntfy.send(notificationMessage, pageUrl);
 
             // Return waitFor to suspend the loop
             return {
               waitFor: reviewEmailsWebhook(sessionId),
               sessionId,
-              escalatedEmails: input.importantEmailIndices,
+              escalatedThreads: input.importantThreadIndices,
               summary: input.summary,
               pageUrl,
             };
@@ -306,20 +309,20 @@ Start by scanning the sender names for matches with the important senders list, 
         },
 
         draft_response: {
-          description: 'Draft a response to an important email. Use this when the user chose "draft_response" action. The draft will be logged to console.',
+          description: 'Draft a response to an important thread. Use this when the user chose "draft_response" action. The draft will be logged to console.',
           inputSchema: z.object({
-            emailIndex: z.number().describe('Index of the email to respond to'),
+            threadIndex: z.number().describe('Index of the thread to respond to'),
             draftSubject: z.string().describe('Subject line for the response'),
             draftBody: z.string().describe('Body of the draft response'),
           }),
-          execute: async (input: { emailIndex: number; draftSubject: string; draftBody: string }) => {
-            const email = emails[input.emailIndex];
-            if (!email) {
-              return { error: 'Email not found' };
+          execute: async (input: { threadIndex: number; draftSubject: string; draftBody: string }) => {
+            const thread = threads[input.threadIndex];
+            if (!thread) {
+              return { error: 'Thread not found' };
             }
 
             console.log('\n📝 ===== DRAFT RESPONSE =====');
-            console.log(`To: ${email.from}`);
+            console.log(`To: ${thread.from}`);
             console.log(`Subject: ${input.draftSubject}`);
             console.log('---');
             console.log(input.draftBody);
@@ -327,7 +330,7 @@ Start by scanning the sender names for matches with the important senders list, 
 
             return {
               drafted: true,
-              to: email.from,
+              to: thread.from,
               subject: input.draftSubject,
               body: input.draftBody,
             };
@@ -337,10 +340,10 @@ Start by scanning the sender names for matches with the important senders list, 
         finish: {
           description: 'Complete the analysis after processing the user\'s chosen action. Call this after handling draft_response, acknowledge, or dismiss.',
           inputSchema: z.object({
-            importantEmails: z.array(z.object({
-              emailIndex: z.number(),
+            importantThreads: z.array(z.object({
+              threadIndex: z.number(),
               reason: z.string(),
-            })).describe('List of important emails with their indices and reasons'),
+            })).describe('List of important threads with their indices and reasons'),
             userAction: z.enum(['acknowledge', 'draft_response', 'dismiss']).describe('The action the user chose'),
             draftedResponses: z.number().optional().describe('Number of responses drafted, if user chose draft_response'),
             summary: z.string().describe('Brief summary including what the user decided and any actions taken'),
@@ -353,8 +356,8 @@ Start by scanning the sender names for matches with the important senders list, 
 
   // Step 3: Format and output results
   .step('Format results and handle actions', async ({ state, ntfy }) => {
-    const emails = (state.emails || []) as Array<{
-      id: string;
+    const threads = (state.threads || []) as Array<{
+      threadId: string;
       accountIndex: number;
       accountName: string;
       subject: string;
@@ -362,28 +365,29 @@ Start by scanning the sender names for matches with the important senders list, 
       date: string;
       snippet: string;
       body: string;
+      messageIds: string[];
     }>;
 
     // Loop terminal tool output is merged into state
     const loopState = state as typeof state & {
-      importantEmails?: Array<{ emailIndex: number; reason: string }>;
+      importantThreads?: Array<{ threadIndex: number; reason: string }>;
       userAction?: 'acknowledge' | 'draft_response' | 'dismiss';
       draftedResponses?: number;
       summary?: string;
     };
 
-    const importantEmails = loopState.importantEmails || [];
+    const importantThreads = loopState.importantThreads || [];
     const userAction = loopState.userAction || 'acknowledge';
     const draftedResponses = loopState.draftedResponses || 0;
     const summary = loopState.summary || 'No summary provided';
 
-    console.log('\n=== Important Emails Results ===\n');
+    console.log('\n=== Important Threads Results ===\n');
     console.log(summary);
     console.log(`User action: ${userAction}`);
     console.log('');
 
-    if (importantEmails.length === 0) {
-      console.log('No important emails found.');
+    if (importantThreads.length === 0) {
+      console.log('No important threads found.');
       return {
         ...state,
         resultCount: 0,
@@ -392,15 +396,15 @@ Start by scanning the sender names for matches with the important senders list, 
       };
     }
 
-    const results = importantEmails.map((item) => {
-      const email = emails[item.emailIndex];
+    const results = importantThreads.map((item) => {
+      const thread = threads[item.threadIndex];
       return {
-        id: email?.id,
-        accountIndex: email?.accountIndex,
-        account: email?.accountName || 'unknown',
-        from: email?.from || 'unknown',
-        subject: email?.subject || 'unknown',
-        date: email?.date || 'unknown',
+        threadId: thread?.threadId,
+        accountIndex: thread?.accountIndex,
+        account: thread?.accountName || 'unknown',
+        from: thread?.from || 'unknown',
+        subject: thread?.subject || 'unknown',
+        date: thread?.date || 'unknown',
         reason: item.reason,
       };
     });
@@ -415,7 +419,7 @@ Start by scanning the sender names for matches with the important senders list, 
 
     // Handle user action
     if (userAction === 'dismiss') {
-      console.log('User dismissed the emails. No action taken.');
+      console.log('User dismissed the threads. No action taken.');
       return {
         ...state,
         resultCount: results.length,
@@ -426,7 +430,7 @@ Start by scanning the sender names for matches with the important senders list, 
 
     if (userAction === 'draft_response') {
       console.log(`User requested drafts. ${draftedResponses} response(s) drafted.`);
-      await ntfy.send(`Drafted ${draftedResponses} response(s) for important emails`);
+      await ntfy.send(`Drafted ${draftedResponses} response(s) for important threads`);
 
       return {
         ...state,
@@ -438,8 +442,8 @@ Start by scanning the sender names for matches with the important senders list, 
     }
 
     // Default: acknowledge
-    console.log('User acknowledged the emails.');
-    await ntfy.send(`Acknowledged ${results.length} important email(s)`);
+    console.log('User acknowledged the threads.');
+    await ntfy.send(`Acknowledged ${results.length} important thread(s)`);
 
     return {
       ...state,

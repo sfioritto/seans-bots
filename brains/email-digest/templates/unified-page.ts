@@ -1,4 +1,4 @@
-import type { ProcessedEmails, RawEmail, ChildrenEmailInfo, BillingEmailInfo } from '../types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo } from '../types.js';
 
 interface CategoryConfig {
   id: string;
@@ -19,19 +19,19 @@ const categories: CategoryConfig[] = [
   { id: 'npm', label: 'NPM', color: '#cb3837', borderColor: '#b52e2e' },
 ];
 
-function renderEmailList(emailIds: string[], emailsById: Record<string, RawEmail>): string {
-  return emailIds.map(emailId => {
-    const email = emailsById[emailId];
-    if (!email) return '';
+function renderThreadList(threadIds: string[], threadsById: Record<string, RawThread>): string {
+  return threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
 
     return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
           <div class="email-content">
-            <span class="email-subject">${escapeHtml(email.subject)}</span>
-            <span class="email-from">${escapeHtml(email.from)}</span>
-            <span class="email-snippet">${escapeHtml(email.snippet)}</span>
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+            <span class="email-snippet">${escapeHtml(thread.snippet)}</span>
           </div>
         </label>
       </div>
@@ -39,25 +39,25 @@ function renderEmailList(emailIds: string[], emailsById: Record<string, RawEmail
   }).join('');
 }
 
-function renderChildrenEmailList(
-  emailIds: string[],
-  emailsById: Record<string, RawEmail>,
+function renderChildrenThreadList(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
   childrenInfo: Record<string, ChildrenEmailInfo>
 ): string {
-  return emailIds.map(emailId => {
-    const email = emailsById[emailId];
-    if (!email) return '';
+  return threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
 
-    const info = childrenInfo[emailId];
+    const info = childrenInfo[threadId];
     const hasAction = info?.actionItem;
 
     return `
       <div class="email-item ${hasAction ? 'has-action' : ''}">
         <label class="checkbox-label">
-          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
           <div class="email-content">
-            <span class="email-subject">${escapeHtml(email.subject)}</span>
-            <span class="email-from">${escapeHtml(email.from)}</span>
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
             ${info ? `<span class="email-summary">${escapeHtml(info.summary)}</span>` : ''}
             ${hasAction ? `<span class="action-item">Action: ${escapeHtml(info.actionItem!)}</span>` : ''}
           </div>
@@ -67,28 +67,28 @@ function renderChildrenEmailList(
   }).join('');
 }
 
-function renderBillingEmailList(
-  emailIds: string[],
-  emailsById: Record<string, RawEmail>,
+function renderBillingThreadList(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
   billingInfo: Record<string, BillingEmailInfo>
 ): string {
-  return emailIds.map(emailId => {
-    const email = emailsById[emailId];
-    if (!email) return '';
+  return threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
 
-    const info = billingInfo[emailId];
+    const info = billingInfo[threadId];
 
     return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
           <div class="email-content">
             <div class="billing-header">
-              <span class="email-subject">${escapeHtml(email.subject)}</span>
+              <span class="email-subject">${escapeHtml(thread.subject)}</span>
               ${info?.amount ? `<span class="billing-amount">${escapeHtml(info.amount)}</span>` : ''}
             </div>
-            <span class="email-from">${escapeHtml(email.from)}</span>
-            ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(email.snippet)}</span>`}
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+            ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(thread.snippet)}</span>`}
           </div>
         </label>
       </div>
@@ -97,21 +97,21 @@ function renderBillingEmailList(
 }
 
 function renderNpmSection(
-  emailIds: string[],
-  emailsById: Record<string, RawEmail>,
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
   npmSummary: string
 ): string {
-  const emailList = emailIds.map(emailId => {
-    const email = emailsById[emailId];
-    if (!email) return '';
+  const threadList = threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
 
     return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
           <div class="email-content">
-            <span class="email-subject">${escapeHtml(email.subject)}</span>
-            <span class="email-from">${escapeHtml(email.from)}</span>
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
           </div>
         </label>
       </div>
@@ -129,9 +129,9 @@ function renderNpmSection(
       </label>
     </div>
     <details class="npm-details">
-      <summary class="npm-details-toggle">${emailIds.length} notification${emailIds.length !== 1 ? 's' : ''}</summary>
+      <summary class="npm-details-toggle">${threadIds.length} notification${threadIds.length !== 1 ? 's' : ''}</summary>
       <div class="npm-emails-list">
-        ${emailList}
+        ${threadList}
       </div>
     </details>
   `;
@@ -163,9 +163,9 @@ export function generateUnifiedPage(
     npm: processed.npm.length,
   };
 
-  const totalEmails = Object.values(counts).reduce((a, b) => a + b, 0);
+  const totalThreads = Object.values(counts).reduce((a, b) => a + b, 0);
 
-  const allEmailIds = [
+  const allThreadIds = [
     ...processed.children,
     ...processed.amazon,
     ...processed.billing,
@@ -416,7 +416,7 @@ export function generateUnifiedPage(
 <body>
   <h1>Email Digest</h1>
   <div class="summary-header">
-    <strong>${totalEmails} emails</strong> found across ${activeTabs.length} categories
+    <strong>${totalThreads} threads</strong> found across ${activeTabs.length} categories
   </div>
 
   <div class="tabs">
@@ -429,7 +429,7 @@ export function generateUnifiedPage(
 
   <form class="archive-form" action="${webhookUrl}" method="POST">
     <input type="hidden" name="sessionId" value="${sessionId}">
-    <input type="hidden" name="allEmailIds" value='${JSON.stringify(allEmailIds)}'>
+    <input type="hidden" name="allThreadIds" value='${JSON.stringify(allThreadIds)}'>
 
     ${counts.children > 0 ? `
       <div id="children" class="tab-content ${firstActiveTab === 'children' ? 'active' : ''}">
@@ -439,7 +439,7 @@ export function generateUnifiedPage(
             Select All Children
           </label>
         </div>
-        ${renderChildrenEmailList(processed.children, processed.emailsById, processed.childrenInfo)}
+        ${renderChildrenThreadList(processed.children, processed.threadsById, processed.childrenInfo)}
       </div>
     ` : ''}
 
@@ -451,7 +451,7 @@ export function generateUnifiedPage(
             Select All Amazon
           </label>
         </div>
-        ${renderEmailList(processed.amazon, processed.emailsById)}
+        ${renderThreadList(processed.amazon, processed.threadsById)}
       </div>
     ` : ''}
 
@@ -463,7 +463,7 @@ export function generateUnifiedPage(
             Select All Billing
           </label>
         </div>
-        ${renderBillingEmailList(processed.billing, processed.emailsById, processed.billingInfo)}
+        ${renderBillingThreadList(processed.billing, processed.threadsById, processed.billingInfo)}
       </div>
     ` : ''}
 
@@ -475,7 +475,7 @@ export function generateUnifiedPage(
             Select All Investments
           </label>
         </div>
-        ${renderEmailList(processed.investments, processed.emailsById)}
+        ${renderThreadList(processed.investments, processed.threadsById)}
       </div>
     ` : ''}
 
@@ -487,7 +487,7 @@ export function generateUnifiedPage(
             Select All Kickstarter
           </label>
         </div>
-        ${renderEmailList(processed.kickstarter, processed.emailsById)}
+        ${renderThreadList(processed.kickstarter, processed.threadsById)}
       </div>
     ` : ''}
 
@@ -499,7 +499,7 @@ export function generateUnifiedPage(
             Select All Newsletters
           </label>
         </div>
-        ${renderEmailList(processed.newsletters, processed.emailsById)}
+        ${renderThreadList(processed.newsletters, processed.threadsById)}
       </div>
     ` : ''}
 
@@ -511,7 +511,7 @@ export function generateUnifiedPage(
             Select All Marketing
           </label>
         </div>
-        ${renderEmailList(processed.marketing, processed.emailsById)}
+        ${renderThreadList(processed.marketing, processed.threadsById)}
       </div>
     ` : ''}
 
@@ -523,13 +523,13 @@ export function generateUnifiedPage(
             Select All Notifications
           </label>
         </div>
-        ${renderEmailList(processed.notifications, processed.emailsById)}
+        ${renderThreadList(processed.notifications, processed.threadsById)}
       </div>
     ` : ''}
 
     ${counts.npm > 0 ? `
       <div id="npm" class="tab-content ${firstActiveTab === 'npm' ? 'active' : ''}">
-        ${renderNpmSection(processed.npm, processed.emailsById, processed.npmSummary || '')}
+        ${renderNpmSection(processed.npm, processed.threadsById, processed.npmSummary || '')}
       </div>
     ` : ''}
 
@@ -553,44 +553,44 @@ export function generateUnifiedPage(
     document.querySelectorAll('.select-all-tab').forEach(checkbox => {
       checkbox.addEventListener('change', function() {
         const tabId = this.dataset.tab;
-        document.querySelectorAll('#' + tabId + ' input[name="emailIds"]').forEach(cb => {
+        document.querySelectorAll('#' + tabId + ' input[name="threadIds"]').forEach(cb => {
           cb.checked = this.checked;
         });
       });
     });
 
-    document.querySelectorAll('input[name="emailIds"]').forEach(cb => {
+    document.querySelectorAll('input[name="threadIds"]').forEach(cb => {
       cb.addEventListener('change', function() {
         const tabContent = this.closest('.tab-content');
         if (!tabContent) return;
-        const all = tabContent.querySelectorAll('input[name="emailIds"]');
-        const checked = tabContent.querySelectorAll('input[name="emailIds"]:checked');
+        const all = tabContent.querySelectorAll('input[name="threadIds"]');
+        const checked = tabContent.querySelectorAll('input[name="threadIds"]:checked');
         const selectAll = tabContent.querySelector('.select-all-tab');
         if (selectAll) selectAll.checked = all.length === checked.length;
       });
     });
 
     function selectAll() {
-      document.querySelectorAll('input[name="emailIds"]').forEach(cb => cb.checked = true);
+      document.querySelectorAll('input[name="threadIds"]').forEach(cb => cb.checked = true);
       document.querySelectorAll('.select-all-tab').forEach(cb => cb.checked = true);
     }
 
     function selectNone() {
-      document.querySelectorAll('input[name="emailIds"]').forEach(cb => cb.checked = false);
+      document.querySelectorAll('input[name="threadIds"]').forEach(cb => cb.checked = false);
       document.querySelectorAll('.select-all-tab').forEach(cb => cb.checked = false);
     }
 
     document.querySelector('form').addEventListener('submit', function(e) {
-      const checkedIds = Array.from(document.querySelectorAll('input[name="emailIds"]:checked'))
+      const checkedIds = Array.from(document.querySelectorAll('input[name="threadIds"]:checked'))
         .map(cb => cb.value);
 
-      document.querySelectorAll('input[name="emailIds"]').forEach(cb => {
+      document.querySelectorAll('input[name="threadIds"]').forEach(cb => {
         cb.disabled = true;
       });
 
       const hiddenField = document.createElement('input');
       hiddenField.type = 'hidden';
-      hiddenField.name = 'emailIds';
+      hiddenField.name = 'threadIds';
       hiddenField.value = JSON.stringify(checkedIds);
       this.appendChild(hiddenField);
     });
