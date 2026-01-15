@@ -16,7 +16,6 @@ const categories: CategoryConfig[] = [
   { id: 'newsletters', label: 'Newsletters', color: '#6366f1', borderColor: '#4f46e5' },
   { id: 'marketing', label: 'Marketing', color: '#ec4899', borderColor: '#db2777' },
   { id: 'notifications', label: 'Notifications', color: '#8b5cf6', borderColor: '#7c3aed' },
-  { id: 'npm', label: 'NPM', color: '#cb3837', borderColor: '#b52e2e' },
 ];
 
 function renderThreadList(threadIds: string[], threadsById: Record<string, RawThread>): string {
@@ -121,9 +120,9 @@ function renderNpmSection(
   return `
     <div class="npm-summary-container">
       <label class="checkbox-label npm-summary-label">
-        <input type="checkbox" class="select-all-tab" data-tab="npm" checked>
+        <input type="checkbox" class="select-all-section" data-section="npm-section" checked>
         <div class="npm-summary-content">
-          <span class="npm-summary-title">Published Packages</span>
+          <span class="npm-summary-title">NPM Packages</span>
           <span class="npm-summary-text">${escapeHtml(npmSummary || 'No summary available')}</span>
         </div>
       </label>
@@ -131,6 +130,88 @@ function renderNpmSection(
     <details class="npm-details">
       <summary class="npm-details-toggle">${threadIds.length} notification${threadIds.length !== 1 ? 's' : ''}</summary>
       <div class="npm-emails-list">
+        ${threadList}
+      </div>
+    </details>
+  `;
+}
+
+function renderSecurityAlertsSection(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
+  securityAlertsSummary: string
+): string {
+  const threadList = threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="security-summary-container">
+      <label class="checkbox-label security-summary-label">
+        <input type="checkbox" class="select-all-section" data-section="security-section" checked>
+        <div class="security-summary-content">
+          <span class="security-summary-title">Security Alerts</span>
+          <span class="security-summary-text">${escapeHtml(securityAlertsSummary || 'No summary available')}</span>
+        </div>
+      </label>
+    </div>
+    <details class="security-details">
+      <summary class="security-details-toggle">${threadIds.length} alert${threadIds.length !== 1 ? 's' : ''}</summary>
+      <div class="security-emails-list">
+        ${threadList}
+      </div>
+    </details>
+  `;
+}
+
+function renderConfirmationCodesSection(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
+  confirmationCodesSummary: string
+): string {
+  const threadList = threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="codes-summary-container">
+      <label class="checkbox-label codes-summary-label">
+        <input type="checkbox" class="select-all-section" data-section="codes-section" checked>
+        <div class="codes-summary-content">
+          <span class="codes-summary-title">Confirmation Codes</span>
+          <span class="codes-summary-text">${escapeHtml(confirmationCodesSummary || 'No summary available')}</span>
+        </div>
+      </label>
+    </div>
+    <details class="codes-details">
+      <summary class="codes-details-toggle">${threadIds.length} code${threadIds.length !== 1 ? 's' : ''}</summary>
+      <div class="codes-emails-list">
         ${threadList}
       </div>
     </details>
@@ -151,6 +232,13 @@ export function generateUnifiedPage(
   sessionId: string,
   webhookUrl: string
 ): string {
+  // Combine all notification types for the tab count
+  const allNotificationsCount =
+    processed.notifications.length +
+    processed.npm.length +
+    processed.securityAlerts.length +
+    processed.confirmationCodes.length;
+
   const counts = {
     children: processed.children.length,
     amazon: processed.amazon.length,
@@ -159,8 +247,7 @@ export function generateUnifiedPage(
     kickstarter: processed.kickstarter.length,
     newsletters: processed.newsletters.length,
     marketing: processed.marketing.length,
-    notifications: processed.notifications.length,
-    npm: processed.npm.length,
+    notifications: allNotificationsCount,
   };
 
   const totalThreads = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -175,6 +262,8 @@ export function generateUnifiedPage(
     ...processed.marketing,
     ...processed.notifications,
     ...processed.npm,
+    ...processed.securityAlerts,
+    ...processed.confirmationCodes,
   ];
 
   const activeTabs = categories.filter(cat => counts[cat.id as keyof typeof counts] > 0);
@@ -382,6 +471,149 @@ export function generateUnifiedPage(
     .npm-emails-list .email-item:last-child {
       margin-bottom: 0;
     }
+    .security-summary-container {
+      background: #fef2f2;
+      border: 1px solid #dc2626;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .security-summary-label {
+      align-items: flex-start;
+    }
+    .security-summary-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .security-summary-title {
+      font-weight: 700;
+      color: #dc2626;
+      font-size: 1em;
+    }
+    .security-summary-text {
+      color: #4b5563;
+      font-size: 0.95em;
+      line-height: 1.5;
+    }
+    .security-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .security-details-toggle {
+      padding: 12px 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 500;
+      color: #6b7280;
+      user-select: none;
+    }
+    .security-details-toggle:hover {
+      background: #f3f4f6;
+    }
+    .security-details[open] .security-details-toggle {
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .security-emails-list {
+      padding: 10px;
+    }
+    .security-emails-list .email-item {
+      margin-bottom: 8px;
+    }
+    .security-emails-list .email-item:last-child {
+      margin-bottom: 0;
+    }
+    .codes-summary-container {
+      background: #f5f3ff;
+      border: 1px solid #7c3aed;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .codes-summary-label {
+      align-items: flex-start;
+    }
+    .codes-summary-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .codes-summary-title {
+      font-weight: 700;
+      color: #7c3aed;
+      font-size: 1em;
+    }
+    .codes-summary-text {
+      color: #4b5563;
+      font-size: 0.95em;
+      line-height: 1.5;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    }
+    .codes-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .codes-details-toggle {
+      padding: 12px 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 500;
+      color: #6b7280;
+      user-select: none;
+    }
+    .codes-details-toggle:hover {
+      background: #f3f4f6;
+    }
+    .codes-details[open] .codes-details-toggle {
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .codes-emails-list {
+      padding: 10px;
+    }
+    .codes-emails-list .email-item {
+      margin-bottom: 8px;
+    }
+    .codes-emails-list .email-item:last-child {
+      margin-bottom: 0;
+    }
+    .notification-subsection {
+      margin-bottom: 20px;
+    }
+    .notification-subsection:last-child {
+      margin-bottom: 0;
+    }
+    .other-notifications-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .other-notifications-toggle {
+      padding: 12px 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 500;
+      color: #6b7280;
+      user-select: none;
+    }
+    .other-notifications-toggle:hover {
+      background: #f3f4f6;
+    }
+    .other-notifications-details[open] .other-notifications-toggle {
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .other-notifications-list {
+      padding: 10px;
+    }
+    .other-notifications-list .email-item {
+      margin-bottom: 8px;
+    }
+    .other-notifications-list .email-item:last-child {
+      margin-bottom: 0;
+    }
     .archive-form {
       margin-top: 30px;
     }
@@ -523,13 +755,35 @@ export function generateUnifiedPage(
             Select All Notifications
           </label>
         </div>
-        ${renderThreadList(processed.notifications, processed.threadsById)}
-      </div>
-    ` : ''}
 
-    ${counts.npm > 0 ? `
-      <div id="npm" class="tab-content ${firstActiveTab === 'npm' ? 'active' : ''}">
-        ${renderNpmSection(processed.npm, processed.threadsById, processed.npmSummary || '')}
+        ${processed.npm.length > 0 ? `
+          <div id="npm-section" class="notification-subsection">
+            ${renderNpmSection(processed.npm, processed.threadsById, processed.npmSummary || '')}
+          </div>
+        ` : ''}
+
+        ${processed.securityAlerts.length > 0 ? `
+          <div id="security-section" class="notification-subsection">
+            ${renderSecurityAlertsSection(processed.securityAlerts, processed.threadsById, processed.securityAlertsSummary || '')}
+          </div>
+        ` : ''}
+
+        ${processed.confirmationCodes.length > 0 ? `
+          <div id="codes-section" class="notification-subsection">
+            ${renderConfirmationCodesSection(processed.confirmationCodes, processed.threadsById, processed.confirmationCodesSummary || '')}
+          </div>
+        ` : ''}
+
+        ${processed.notifications.length > 0 ? `
+          <div id="other-notifications-section" class="notification-subsection">
+            <details class="other-notifications-details" open>
+              <summary class="other-notifications-toggle">Other Notifications (${processed.notifications.length})</summary>
+              <div class="other-notifications-list">
+                ${renderThreadList(processed.notifications, processed.threadsById)}
+              </div>
+            </details>
+          </div>
+        ` : ''}
       </div>
     ` : ''}
 
@@ -556,11 +810,36 @@ export function generateUnifiedPage(
         document.querySelectorAll('#' + tabId + ' input[name="threadIds"]').forEach(cb => {
           cb.checked = this.checked;
         });
+        // Also update section checkboxes within this tab
+        document.querySelectorAll('#' + tabId + ' .select-all-section').forEach(cb => {
+          cb.checked = this.checked;
+        });
+      });
+    });
+
+    // Section-specific select all (for npm, security, codes subsections)
+    document.querySelectorAll('.select-all-section').forEach(checkbox => {
+      checkbox.addEventListener('change', function() {
+        const sectionId = this.dataset.section;
+        document.querySelectorAll('#' + sectionId + ' input[name="threadIds"]').forEach(cb => {
+          cb.checked = this.checked;
+        });
+        // Update the parent tab's select-all state
+        updateTabSelectAll(this);
       });
     });
 
     document.querySelectorAll('input[name="threadIds"]').forEach(cb => {
       cb.addEventListener('change', function() {
+        // Update section select-all
+        const section = this.closest('.notification-subsection');
+        if (section) {
+          const sectionAll = section.querySelectorAll('input[name="threadIds"]');
+          const sectionChecked = section.querySelectorAll('input[name="threadIds"]:checked');
+          const sectionSelectAll = section.querySelector('.select-all-section');
+          if (sectionSelectAll) sectionSelectAll.checked = sectionAll.length === sectionChecked.length;
+        }
+        // Update tab select-all
         const tabContent = this.closest('.tab-content');
         if (!tabContent) return;
         const all = tabContent.querySelectorAll('input[name="threadIds"]');
@@ -570,14 +849,25 @@ export function generateUnifiedPage(
       });
     });
 
+    function updateTabSelectAll(sectionCheckbox) {
+      const tabContent = sectionCheckbox.closest('.tab-content');
+      if (!tabContent) return;
+      const all = tabContent.querySelectorAll('input[name="threadIds"]');
+      const checked = tabContent.querySelectorAll('input[name="threadIds"]:checked');
+      const selectAll = tabContent.querySelector('.select-all-tab');
+      if (selectAll) selectAll.checked = all.length === checked.length;
+    }
+
     function selectAll() {
       document.querySelectorAll('input[name="threadIds"]').forEach(cb => cb.checked = true);
       document.querySelectorAll('.select-all-tab').forEach(cb => cb.checked = true);
+      document.querySelectorAll('.select-all-section').forEach(cb => cb.checked = true);
     }
 
     function selectNone() {
       document.querySelectorAll('input[name="threadIds"]').forEach(cb => cb.checked = false);
       document.querySelectorAll('.select-all-tab').forEach(cb => cb.checked = false);
+      document.querySelectorAll('.select-all-section').forEach(cb => cb.checked = false);
     }
 
     document.querySelector('form').addEventListener('submit', function(e) {

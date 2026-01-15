@@ -36,8 +36,12 @@ export interface ProcessedEmails {
   marketing: string[];
   notifications: string[];
   npm: string[];
+  securityAlerts: string[];
+  confirmationCodes: string[];
   // Enrichment data keyed by thread ID
   childrenInfo: Record<string, ChildrenEmailInfo>;
   billingInfo: Record<string, BillingEmailInfo>;
   npmSummary?: string;
+  securityAlertsSummary?: string;
+  confirmationCodesSummary?: string;
 }

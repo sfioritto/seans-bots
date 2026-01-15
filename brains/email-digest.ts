@@ -36,7 +36,8 @@ async function withRetry<T>(
 const categorySchema = z.object({
   category: z.enum([
     'children', 'amazon', 'billing', 'investments',
-    'kickstarter', 'newsletters', 'marketing', 'notifications', 'npm'
+    'kickstarter', 'newsletters', 'marketing', 'notifications', 'npm',
+    'security-alerts', 'confirmation-codes'
   ]),
 });
 
@@ -55,6 +56,16 @@ const billingEnrichmentSchema = z.object({
 // Schema for NPM summary
 const npmSummarySchema = z.object({
   summary: z.string().describe('Concise summary of packages published with their versions, e.g. "@positronic/shell: v0.0.50, v0.0.51; @positronic/core: v1.2.3"'),
+});
+
+// Schema for security alerts summary
+const securityAlertsSummarySchema = z.object({
+  summary: z.string().describe('Summary of security alerts grouped by service and type, e.g. "Google: 2 sign-ins (Chicago, NYC); Apple: new device added"'),
+});
+
+// Schema for confirmation codes summary
+const confirmationCodesSummarySchema = z.object({
+  summary: z.string().describe('Summary of confirmation codes grouped by service with the code if visible, e.g. "GitHub: 123456; Slack: 789012; Gmail: verification link"'),
 });
 
 function buildCategorizationPrompt(thread: RawThread): string {
@@ -76,6 +87,8 @@ Categories (pick ONE):
 - marketing: Marketing emails, promotions, sales, ads
 - notifications: System notifications, product updates, policy changes, announcements. Notifications are of little value and should not be from clients, customers, friends, family, etc.
 - npm: NPM package publish notifications from npmjs.com, npm registry emails
+- security-alerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts from services like Google, Apple, banks, etc.
+- confirmation-codes: OTP codes, verification codes, 2FA codes, login codes, confirmation emails with numeric codes or verification links
 - Uncategorized: If it's not a great fit in any of the other categories, put it here.
 
 Think about what this email is PRIMARILY about, then choose the single best category.`;
@@ -113,6 +126,38 @@ Group by package name. If the same package has multiple versions published, list
 Format: "@scope/package: v1.0.0, v1.0.1; @scope/other: v2.0.0"
 
 Keep it concise - just package names and versions, nothing else.
+
+${threadBodies}`;
+}
+
+function buildSecurityAlertsSummaryPrompt(threads: RawThread[]): string {
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  return `Here are security alert emails (sign-in notifications, password changes, new device alerts, etc.).
+
+Summarize them grouped by service. Include:
+- The service name (Google, Apple, bank name, etc.)
+- Type of alert (sign-in, new device, password change)
+- Location or device info if mentioned
+
+Format: "Google: 2 sign-ins (Chicago, NYC); Apple: new device added; Chase: password changed"
+
+Keep it concise - just service, alert type, and key details.
+
+${threadBodies}`;
+}
+
+function buildConfirmationCodesSummaryPrompt(threads: RawThread[]): string {
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  return `Here are confirmation code / verification emails (OTP codes, 2FA codes, verification links, etc.).
+
+Summarize them grouped by service. Include:
+- The service name
+- The code if visible (numeric codes like 123456)
+- Or note "verification link" if it's a link-based verification
+
+Format: "GitHub: 123456; Slack: 789012; Gmail: verification link"
+
+Keep it concise - just service and code/type.
 
 ${threadBodies}`;
 }
@@ -172,9 +217,13 @@ const emailDigestBrain = brain({
       marketing: [] as string[],
       notifications: [] as string[],
       npm: [] as string[],
+      securityAlerts: [] as string[],
+      confirmationCodes: [] as string[],
       childrenInfo: {} as Record<string, ChildrenEmailInfo>,
       billingInfo: {} as Record<string, BillingEmailInfo>,
       npmSummary: '' as string,
+      securityAlertsSummary: '' as string,
+      confirmationCodesSummary: '' as string,
     } as any;
   })
 
@@ -196,6 +245,8 @@ const emailDigestBrain = brain({
       marketing: [],
       notifications: [],
       npm: [],
+      'security-alerts': [],
+      'confirmation-codes': [],
     };
 
     const BATCH_SIZE = 20;
@@ -235,10 +286,14 @@ const emailDigestBrain = brain({
     const childrenIds = state.children as unknown as string[];
     const billingIds = state.billing as unknown as string[];
     const npmIds = state.npm as unknown as string[];
+    const securityAlertIds = (state as any)['security-alerts'] as string[] || [];
+    const confirmationCodeIds = (state as any)['confirmation-codes'] as string[] || [];
 
     const childrenInfo: Record<string, ChildrenEmailInfo> = {};
     const billingInfo: Record<string, BillingEmailInfo> = {};
     let npmSummary = '';
+    let securityAlertsSummary = '';
+    let confirmationCodesSummary = '';
 
     // Enrich children threads
     for (const threadId of childrenIds) {
@@ -283,11 +338,39 @@ const emailDigestBrain = brain({
       npmSummary = result.summary;
     }
 
+    // Generate security alerts summary
+    if (securityAlertIds.length > 0) {
+      const securityThreads = securityAlertIds.map(threadId => threadsById[threadId]).filter(Boolean);
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildSecurityAlertsSummaryPrompt(securityThreads),
+          schema: securityAlertsSummarySchema,
+          schemaName: 'securityAlertsSummary',
+        })
+      );
+      securityAlertsSummary = result.summary;
+    }
+
+    // Generate confirmation codes summary
+    if (confirmationCodeIds.length > 0) {
+      const codeThreads = confirmationCodeIds.map(threadId => threadsById[threadId]).filter(Boolean);
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildConfirmationCodesSummaryPrompt(codeThreads),
+          schema: confirmationCodesSummarySchema,
+          schemaName: 'confirmationCodesSummary',
+        })
+      );
+      confirmationCodesSummary = result.summary;
+    }
+
     return {
       ...state,
       childrenInfo,
       billingInfo,
       npmSummary,
+      securityAlertsSummary,
+      confirmationCodesSummary,
     } as any;
   })
 
@@ -304,9 +387,13 @@ const emailDigestBrain = brain({
       marketing: s.marketing as string[],
       notifications: s.notifications as string[],
       npm: s.npm as string[],
+      securityAlerts: s['security-alerts'] as string[] || [],
+      confirmationCodes: s['confirmation-codes'] as string[] || [],
       childrenInfo: s.childrenInfo as Record<string, ChildrenEmailInfo>,
       billingInfo: s.billingInfo as Record<string, BillingEmailInfo>,
       npmSummary: s.npmSummary as string,
+      securityAlertsSummary: s.securityAlertsSummary as string,
+      confirmationCodesSummary: s.confirmationCodesSummary as string,
     };
 
     const totalEmails =
@@ -318,7 +405,9 @@ const emailDigestBrain = brain({
       processedData.newsletters.length +
       processedData.marketing.length +
       processedData.notifications.length +
-      processedData.npm.length;
+      processedData.npm.length +
+      processedData.securityAlerts.length +
+      processedData.confirmationCodes.length;
 
     if (totalEmails === 0) {
       return { ...state, sessionId: '', pageUrl: '' };
@@ -356,6 +445,11 @@ const emailDigestBrain = brain({
     const marketing = (state as any).marketing as string[];
     const notifications = (state as any).notifications as string[];
     const npm = (state as any).npm as string[];
+    const securityAlerts = (state as any)['security-alerts'] as string[] || [];
+    const confirmationCodes = (state as any)['confirmation-codes'] as string[] || [];
+
+    // Combine all notification types for the count
+    const allNotifications = notifications.length + npm.length + securityAlerts.length + confirmationCodes.length;
 
     const counts = [
       children.length > 0 ? `${children.length} children` : null,
@@ -365,8 +459,7 @@ const emailDigestBrain = brain({
       kickstarter.length > 0 ? `${kickstarter.length} Kickstarter` : null,
       newsletters.length > 0 ? `${newsletters.length} newsletters` : null,
       marketing.length > 0 ? `${marketing.length} marketing` : null,
-      notifications.length > 0 ? `${notifications.length} notifications` : null,
-      npm.length > 0 ? `${npm.length} npm` : null,
+      allNotifications > 0 ? `${allNotifications} notifications` : null,
     ].filter(Boolean);
 
     const message = `Email digest: ${counts.join(', ')}`;
