@@ -33,7 +33,9 @@ export interface ProcessedEmails {
   newsletters: string[];
   marketing: string[];
   notifications: string[];
+  npm: string[];
   // Enrichment data keyed by email ID
   childrenInfo: Record<string, ChildrenEmailInfo>;
   billingInfo: Record<string, BillingEmailInfo>;
+  npmSummary?: string;
 }

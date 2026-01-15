@@ -16,6 +16,7 @@ const categories: CategoryConfig[] = [
   { id: 'newsletters', label: 'Newsletters', color: '#6366f1', borderColor: '#4f46e5' },
   { id: 'marketing', label: 'Marketing', color: '#ec4899', borderColor: '#db2777' },
   { id: 'notifications', label: 'Notifications', color: '#8b5cf6', borderColor: '#7c3aed' },
+  { id: 'npm', label: 'NPM', color: '#cb3837', borderColor: '#b52e2e' },
 ];
 
 function renderEmailList(emailIds: string[], emailsById: Record<string, RawEmail>): string {
@@ -95,6 +96,47 @@ function renderBillingEmailList(
   }).join('');
 }
 
+function renderNpmSection(
+  emailIds: string[],
+  emailsById: Record<string, RawEmail>,
+  npmSummary: string
+): string {
+  const emailList = emailIds.map(emailId => {
+    const email = emailsById[emailId];
+    if (!email) return '';
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="emailIds" value="${emailId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(email.subject)}</span>
+            <span class="email-from">${escapeHtml(email.from)}</span>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="npm-summary-container">
+      <label class="checkbox-label npm-summary-label">
+        <input type="checkbox" class="select-all-tab" data-tab="npm" checked>
+        <div class="npm-summary-content">
+          <span class="npm-summary-title">Published Packages</span>
+          <span class="npm-summary-text">${escapeHtml(npmSummary || 'No summary available')}</span>
+        </div>
+      </label>
+    </div>
+    <details class="npm-details">
+      <summary class="npm-details-toggle">${emailIds.length} notification${emailIds.length !== 1 ? 's' : ''}</summary>
+      <div class="npm-emails-list">
+        ${emailList}
+      </div>
+    </details>
+  `;
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -118,6 +160,7 @@ export function generateUnifiedPage(
     newsletters: processed.newsletters.length,
     marketing: processed.marketing.length,
     notifications: processed.notifications.length,
+    npm: processed.npm.length,
   };
 
   const totalEmails = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -131,6 +174,7 @@ export function generateUnifiedPage(
     ...processed.newsletters,
     ...processed.marketing,
     ...processed.notifications,
+    ...processed.npm,
   ];
 
   const activeTabs = categories.filter(cat => counts[cat.id as keyof typeof counts] > 0);
@@ -283,6 +327,61 @@ export function generateUnifiedPage(
       font-size: 1.1em;
       white-space: nowrap;
     }
+    .npm-summary-container {
+      background: #fef2f2;
+      border: 1px solid #cb3837;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .npm-summary-label {
+      align-items: flex-start;
+    }
+    .npm-summary-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .npm-summary-title {
+      font-weight: 700;
+      color: #cb3837;
+      font-size: 1em;
+    }
+    .npm-summary-text {
+      color: #4b5563;
+      font-size: 0.95em;
+      line-height: 1.5;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    }
+    .npm-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .npm-details-toggle {
+      padding: 12px 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 500;
+      color: #6b7280;
+      user-select: none;
+    }
+    .npm-details-toggle:hover {
+      background: #f3f4f6;
+    }
+    .npm-details[open] .npm-details-toggle {
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .npm-emails-list {
+      padding: 10px;
+    }
+    .npm-emails-list .email-item {
+      margin-bottom: 8px;
+    }
+    .npm-emails-list .email-item:last-child {
+      margin-bottom: 0;
+    }
     .archive-form {
       margin-top: 30px;
     }
@@ -425,6 +524,12 @@ export function generateUnifiedPage(
           </label>
         </div>
         ${renderEmailList(processed.notifications, processed.emailsById)}
+      </div>
+    ` : ''}
+
+    ${counts.npm > 0 ? `
+      <div id="npm" class="tab-content ${firstActiveTab === 'npm' ? 'active' : ''}">
+        ${renderNpmSection(processed.npm, processed.emailsById, processed.npmSummary || '')}
       </div>
     ` : ''}
 

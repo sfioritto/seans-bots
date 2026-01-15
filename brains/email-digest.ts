@@ -36,7 +36,7 @@ async function withRetry<T>(
 const categorySchema = z.object({
   category: z.enum([
     'children', 'amazon', 'billing', 'investments',
-    'kickstarter', 'newsletters', 'marketing', 'notifications'
+    'kickstarter', 'newsletters', 'marketing', 'notifications', 'npm'
   ]),
 });
 
@@ -50,6 +50,11 @@ const childrenEnrichmentSchema = z.object({
 const billingEnrichmentSchema = z.object({
   description: z.string().describe('Brief description of what this bill/payment is for'),
   amount: z.string().nullable().describe('The dollar amount if visible in the email (e.g. "$49.99"). Otherwise null.'),
+});
+
+// Schema for NPM summary
+const npmSummarySchema = z.object({
+  summary: z.string().describe('Concise summary of packages published with their versions, e.g. "@positronic/shell: v0.0.50, v0.0.51; @positronic/core: v1.2.3"'),
 });
 
 function buildCategorizationPrompt(email: RawEmail): string {
@@ -70,6 +75,7 @@ Categories (pick ONE):
 - newsletters: Newsletter subscriptions, periodic digests
 - marketing: Marketing emails, promotions, sales, ads
 - notifications: System notifications, product updates, policy changes, announcements
+- npm: NPM package publish notifications from npmjs.com, npm registry emails
 - Uncategorized: If it's not a great fit in any of the other categories, put it here.
 
 Think about what this email is PRIMARILY about, then choose the single best category.`;
@@ -97,6 +103,18 @@ Body: ${email.body.substring(0, 1500)}
 Provide:
 1. Brief description of what this bill or payment is for
 2. The dollar amount if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.`;
+}
+
+function buildNpmSummaryPrompt(emails: RawEmail[]): string {
+  const emailBodies = emails.map(e => `Subject: ${e.subject}\nBody: ${e.body.substring(0, 500)}`).join('\n\n---\n\n');
+  return `Here are NPM package publish notifications. Summarize which packages were published and what versions.
+
+Group by package name. If the same package has multiple versions published, list all versions together.
+Format: "@scope/package: v1.0.0, v1.0.1; @scope/other: v2.0.0"
+
+Keep it concise - just package names and versions, nothing else.
+
+${emailBodies}`;
 }
 
 const emailDigestBrain = brain({
@@ -151,8 +169,10 @@ const emailDigestBrain = brain({
       newsletters: [] as string[],
       marketing: [] as string[],
       notifications: [] as string[],
+      npm: [] as string[],
       childrenInfo: {} as Record<string, ChildrenEmailInfo>,
       billingInfo: {} as Record<string, BillingEmailInfo>,
+      npmSummary: '' as string,
     } as any;
   })
 
@@ -173,6 +193,7 @@ const emailDigestBrain = brain({
       newsletters: [],
       marketing: [],
       notifications: [],
+      npm: [],
     };
 
     const BATCH_SIZE = 20;
@@ -207,13 +228,15 @@ const emailDigestBrain = brain({
     } as any;
   })
 
-  .step('Enrich children and billing emails', async ({ state, client }) => {
+  .step('Enrich children, billing, and npm emails', async ({ state, client }) => {
     const emailsById = state.emailsById as unknown as Record<string, RawEmail>;
     const childrenIds = state.children as unknown as string[];
     const billingIds = state.billing as unknown as string[];
+    const npmIds = state.npm as unknown as string[];
 
     const childrenInfo: Record<string, ChildrenEmailInfo> = {};
     const billingInfo: Record<string, BillingEmailInfo> = {};
+    let npmSummary = '';
 
     // Enrich children emails
     for (const id of childrenIds) {
@@ -245,10 +268,24 @@ const emailDigestBrain = brain({
       billingInfo[id] = result;
     }
 
+    // Generate npm summary
+    if (npmIds.length > 0) {
+      const npmEmails = npmIds.map(id => emailsById[id]).filter(Boolean);
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildNpmSummaryPrompt(npmEmails),
+          schema: npmSummarySchema,
+          schemaName: 'npmSummary',
+        })
+      );
+      npmSummary = result.summary;
+    }
+
     return {
       ...state,
       childrenInfo,
       billingInfo,
+      npmSummary,
     } as any;
   })
 
@@ -264,8 +301,10 @@ const emailDigestBrain = brain({
       newsletters: s.newsletters as string[],
       marketing: s.marketing as string[],
       notifications: s.notifications as string[],
+      npm: s.npm as string[],
       childrenInfo: s.childrenInfo as Record<string, ChildrenEmailInfo>,
       billingInfo: s.billingInfo as Record<string, BillingEmailInfo>,
+      npmSummary: s.npmSummary as string,
     };
 
     const totalEmails =
@@ -276,7 +315,8 @@ const emailDigestBrain = brain({
       processedData.kickstarter.length +
       processedData.newsletters.length +
       processedData.marketing.length +
-      processedData.notifications.length;
+      processedData.notifications.length +
+      processedData.npm.length;
 
     if (totalEmails === 0) {
       return { ...state, sessionId: '', pageUrl: '' };
@@ -313,6 +353,7 @@ const emailDigestBrain = brain({
     const newsletters = (state as any).newsletters as string[];
     const marketing = (state as any).marketing as string[];
     const notifications = (state as any).notifications as string[];
+    const npm = (state as any).npm as string[];
 
     const counts = [
       children.length > 0 ? `${children.length} children` : null,
@@ -323,6 +364,7 @@ const emailDigestBrain = brain({
       newsletters.length > 0 ? `${newsletters.length} newsletters` : null,
       marketing.length > 0 ? `${marketing.length} marketing` : null,
       notifications.length > 0 ? `${notifications.length} notifications` : null,
+      npm.length > 0 ? `${npm.length} npm` : null,
     ].filter(Boolean);
 
     const message = `Email digest: ${counts.join(', ')}`;
