@@ -123,7 +123,7 @@ function renderNpmSection(
         <input type="checkbox" class="select-all-section" data-section="npm-section" checked>
         <div class="npm-summary-content">
           <span class="npm-summary-title">NPM Packages</span>
-          <span class="npm-summary-text">${escapeHtml(npmSummary || 'No summary available')}</span>
+          <ul class="summary-list">${formatSummaryAsBullets(npmSummary)}</ul>
         </div>
       </label>
     </div>
@@ -164,7 +164,7 @@ function renderSecurityAlertsSection(
         <input type="checkbox" class="select-all-section" data-section="security-section" checked>
         <div class="security-summary-content">
           <span class="security-summary-title">Security Alerts</span>
-          <span class="security-summary-text">${escapeHtml(securityAlertsSummary || 'No summary available')}</span>
+          <ul class="summary-list">${formatSummaryAsBullets(securityAlertsSummary)}</ul>
         </div>
       </label>
     </div>
@@ -205,13 +205,54 @@ function renderConfirmationCodesSection(
         <input type="checkbox" class="select-all-section" data-section="codes-section" checked>
         <div class="codes-summary-content">
           <span class="codes-summary-title">Confirmation Codes</span>
-          <span class="codes-summary-text">${escapeHtml(confirmationCodesSummary || 'No summary available')}</span>
+          <ul class="summary-list">${formatSummaryAsBullets(confirmationCodesSummary)}</ul>
         </div>
       </label>
     </div>
     <details class="codes-details">
       <summary class="codes-details-toggle">${threadIds.length} code${threadIds.length !== 1 ? 's' : ''}</summary>
       <div class="codes-emails-list">
+        ${threadList}
+      </div>
+    </details>
+  `;
+}
+
+function renderRemindersSection(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
+  remindersSummary: string
+): string {
+  const threadList = threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="reminders-summary-container">
+      <label class="checkbox-label reminders-summary-label">
+        <input type="checkbox" class="select-all-section" data-section="reminders-section" checked>
+        <div class="reminders-summary-content">
+          <span class="reminders-summary-title">Reminders</span>
+          <ul class="summary-list">${formatSummaryAsBullets(remindersSummary)}</ul>
+        </div>
+      </label>
+    </div>
+    <details class="reminders-details">
+      <summary class="reminders-details-toggle">${threadIds.length} reminder${threadIds.length !== 1 ? 's' : ''}</summary>
+      <div class="reminders-emails-list">
         ${threadList}
       </div>
     </details>
@@ -227,6 +268,12 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#039;');
 }
 
+function formatSummaryAsBullets(summary: string): string {
+  if (!summary) return '<li>No summary available</li>';
+  const items = summary.split(';').map(item => item.trim()).filter(Boolean);
+  return items.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+}
+
 export function generateUnifiedPage(
   processed: ProcessedEmails,
   sessionId: string,
@@ -237,7 +284,8 @@ export function generateUnifiedPage(
     processed.notifications.length +
     processed.npm.length +
     processed.securityAlerts.length +
-    processed.confirmationCodes.length;
+    processed.confirmationCodes.length +
+    processed.reminders.length;
 
   const counts = {
     children: processed.children.length,
@@ -264,6 +312,7 @@ export function generateUnifiedPage(
     ...processed.npm,
     ...processed.securityAlerts,
     ...processed.confirmationCodes,
+    ...processed.reminders,
   ];
 
   const activeTabs = categories.filter(cat => counts[cat.id as keyof typeof counts] > 0);
@@ -437,6 +486,16 @@ export function generateUnifiedPage(
       color: #cb3837;
       font-size: 1em;
     }
+    .summary-list {
+      margin: 0;
+      padding-left: 20px;
+      color: #4b5563;
+      font-size: 0.95em;
+      line-height: 1.6;
+    }
+    .summary-list li {
+      margin-bottom: 2px;
+    }
     .npm-summary-text {
       color: #4b5563;
       font-size: 0.95em;
@@ -578,6 +637,60 @@ export function generateUnifiedPage(
       margin-bottom: 8px;
     }
     .codes-emails-list .email-item:last-child {
+      margin-bottom: 0;
+    }
+    .reminders-summary-container {
+      background: #fefce8;
+      border: 1px solid #ca8a04;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .reminders-summary-label {
+      align-items: flex-start;
+    }
+    .reminders-summary-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .reminders-summary-title {
+      font-weight: 700;
+      color: #ca8a04;
+      font-size: 1em;
+    }
+    .reminders-summary-text {
+      color: #4b5563;
+      font-size: 0.95em;
+      line-height: 1.5;
+    }
+    .reminders-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .reminders-details-toggle {
+      padding: 12px 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 500;
+      color: #6b7280;
+      user-select: none;
+    }
+    .reminders-details-toggle:hover {
+      background: #f3f4f6;
+    }
+    .reminders-details[open] .reminders-details-toggle {
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .reminders-emails-list {
+      padding: 10px;
+    }
+    .reminders-emails-list .email-item {
+      margin-bottom: 8px;
+    }
+    .reminders-emails-list .email-item:last-child {
       margin-bottom: 0;
     }
     .notification-subsection {
@@ -771,6 +884,12 @@ export function generateUnifiedPage(
         ${processed.confirmationCodes.length > 0 ? `
           <div id="codes-section" class="notification-subsection">
             ${renderConfirmationCodesSection(processed.confirmationCodes, processed.threadsById, processed.confirmationCodesSummary || '')}
+          </div>
+        ` : ''}
+
+        ${processed.reminders.length > 0 ? `
+          <div id="reminders-section" class="notification-subsection">
+            ${renderRemindersSection(processed.reminders, processed.threadsById, processed.remindersSummary || '')}
           </div>
         ` : ''}
 

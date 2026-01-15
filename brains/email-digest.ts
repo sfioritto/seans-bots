@@ -37,7 +37,7 @@ const categorySchema = z.object({
   category: z.enum([
     'children', 'amazon', 'billing', 'investments',
     'kickstarter', 'newsletters', 'marketing', 'notifications', 'npm',
-    'security-alerts', 'confirmation-codes'
+    'security-alerts', 'confirmation-codes', 'reminders'
   ]),
 });
 
@@ -68,6 +68,11 @@ const confirmationCodesSummarySchema = z.object({
   summary: z.string().describe('Summary of confirmation codes grouped by service with the code if visible, e.g. "GitHub: 123456; Slack: 789012; Gmail: verification link"'),
 });
 
+// Schema for reminders summary
+const remindersSummarySchema = z.object({
+  summary: z.string().describe('Summary of upcoming events/reminders grouped by date or type, e.g. "Today: dentist 2pm, team sync 4pm; Tomorrow: flight to NYC"'),
+});
+
 function buildCategorizationPrompt(thread: RawThread): string {
   return `I am Sean Fioritto. My wife is Beth Fioritto. Her most common email address is beth.lukes@gmail.com. The emails you are reading are from my inbox. My kids are Isaac and Ada.
 
@@ -89,6 +94,7 @@ Categories (pick ONE):
 - npm: NPM package publish notifications from npmjs.com, npm registry emails
 - security-alerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts from services like Google, Apple, banks, etc.
 - confirmation-codes: OTP codes, verification codes, 2FA codes, login codes, confirmation emails with numeric codes or verification links
+- reminders: Calendar reminders, event notifications, appointment reminders, upcoming meetings, flight reminders, reservation confirmations with dates, "don't forget" emails
 - Uncategorized: If it's not a great fit in any of the other categories, put it here.
 
 Think about what this email is PRIMARILY about, then choose the single best category.`;
@@ -162,6 +168,22 @@ Keep it concise - just service and code/type.
 ${threadBodies}`;
 }
 
+function buildRemindersSummaryPrompt(threads: RawThread[]): string {
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  return `Here are calendar reminders, event notifications, and appointment reminders.
+
+Summarize them grouped by date/time if available. Include:
+- The date/time (Today, Tomorrow, specific date)
+- What the event/reminder is about
+- Location if mentioned
+
+Format: "Today: dentist 2pm, team sync 4pm; Tomorrow: flight to NYC 8am; Jan 20: doctor appointment"
+
+Keep it concise - just date, event, and time.
+
+${threadBodies}`;
+}
+
 const emailDigestBrain = brain({
   title: 'email-digest',
   description: 'Categorizes inbox emails and extracts key info like action items and bill amounts',
@@ -219,11 +241,13 @@ const emailDigestBrain = brain({
       npm: [] as string[],
       securityAlerts: [] as string[],
       confirmationCodes: [] as string[],
+      reminders: [] as string[],
       childrenInfo: {} as Record<string, ChildrenEmailInfo>,
       billingInfo: {} as Record<string, BillingEmailInfo>,
       npmSummary: '' as string,
       securityAlertsSummary: '' as string,
       confirmationCodesSummary: '' as string,
+      remindersSummary: '' as string,
     } as any;
   })
 
@@ -247,6 +271,7 @@ const emailDigestBrain = brain({
       npm: [],
       'security-alerts': [],
       'confirmation-codes': [],
+      'reminders': [],
     };
 
     const BATCH_SIZE = 20;
@@ -288,12 +313,14 @@ const emailDigestBrain = brain({
     const npmIds = state.npm as unknown as string[];
     const securityAlertIds = (state as any)['security-alerts'] as string[] || [];
     const confirmationCodeIds = (state as any)['confirmation-codes'] as string[] || [];
+    const reminderIds = (state as any)['reminders'] as string[] || [];
 
     const childrenInfo: Record<string, ChildrenEmailInfo> = {};
     const billingInfo: Record<string, BillingEmailInfo> = {};
     let npmSummary = '';
     let securityAlertsSummary = '';
     let confirmationCodesSummary = '';
+    let remindersSummary = '';
 
     // Enrich children threads
     for (const threadId of childrenIds) {
@@ -364,6 +391,19 @@ const emailDigestBrain = brain({
       confirmationCodesSummary = result.summary;
     }
 
+    // Generate reminders summary
+    if (reminderIds.length > 0) {
+      const reminderThreads = reminderIds.map(threadId => threadsById[threadId]).filter(Boolean);
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildRemindersSummaryPrompt(reminderThreads),
+          schema: remindersSummarySchema,
+          schemaName: 'remindersSummary',
+        })
+      );
+      remindersSummary = result.summary;
+    }
+
     return {
       ...state,
       childrenInfo,
@@ -371,6 +411,7 @@ const emailDigestBrain = brain({
       npmSummary,
       securityAlertsSummary,
       confirmationCodesSummary,
+      remindersSummary,
     } as any;
   })
 
@@ -389,11 +430,13 @@ const emailDigestBrain = brain({
       npm: s.npm as string[],
       securityAlerts: s['security-alerts'] as string[] || [],
       confirmationCodes: s['confirmation-codes'] as string[] || [],
+      reminders: s['reminders'] as string[] || [],
       childrenInfo: s.childrenInfo as Record<string, ChildrenEmailInfo>,
       billingInfo: s.billingInfo as Record<string, BillingEmailInfo>,
       npmSummary: s.npmSummary as string,
       securityAlertsSummary: s.securityAlertsSummary as string,
       confirmationCodesSummary: s.confirmationCodesSummary as string,
+      remindersSummary: s.remindersSummary as string,
     };
 
     const totalEmails =
@@ -407,7 +450,8 @@ const emailDigestBrain = brain({
       processedData.notifications.length +
       processedData.npm.length +
       processedData.securityAlerts.length +
-      processedData.confirmationCodes.length;
+      processedData.confirmationCodes.length +
+      processedData.reminders.length;
 
     if (totalEmails === 0) {
       return { ...state, sessionId: '', pageUrl: '' };
@@ -447,9 +491,10 @@ const emailDigestBrain = brain({
     const npm = (state as any).npm as string[];
     const securityAlerts = (state as any)['security-alerts'] as string[] || [];
     const confirmationCodes = (state as any)['confirmation-codes'] as string[] || [];
+    const reminders = (state as any)['reminders'] as string[] || [];
 
     // Combine all notification types for the count
-    const allNotifications = notifications.length + npm.length + securityAlerts.length + confirmationCodes.length;
+    const allNotifications = notifications.length + npm.length + securityAlerts.length + confirmationCodes.length + reminders.length;
 
     const counts = [
       children.length > 0 ? `${children.length} children` : null,
