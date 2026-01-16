@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { brain } from '../brain.js';
 import archiveWebhook from '../webhooks/archive.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo } from './email-digest/types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo } from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';
 
 // Helper for retry with exponential backoff
@@ -55,9 +55,20 @@ const billingEnrichmentSchema = z.object({
 });
 
 // Schema for receipts email enrichment
+const receiptLineItemSchema = z.object({
+  item: z.string().describe('Name or description of the item purchased'),
+  amount: z.string().nullable().describe('The dollar amount for this item (e.g. "$49.99"). Otherwise null.'),
+});
+
 const receiptsEnrichmentSchema = z.object({
-  description: z.string().describe('Brief description of what was purchased/paid'),
-  amount: z.string().nullable().describe('The dollar amount paid (e.g. "$49.99"). Otherwise null.'),
+  description: z.string().describe('Brief description of what was purchased/paid (merchant name or service)'),
+  totalAmount: z.string().nullable().describe('The total dollar amount paid (e.g. "$49.99"). Otherwise null.'),
+  lineItems: z.array(receiptLineItemSchema).describe('Individual items purchased. If no itemized list is visible, return an empty array.'),
+});
+
+// Schema for newsletter email enrichment
+const newsletterEnrichmentSchema = z.object({
+  webLink: z.string().nullable().describe('The URL to view this newsletter in a web browser. Look for links like "View in browser", "Read online", "View this email in your browser", "Click here to read online". If no such link exists, return null.'),
 });
 
 // Schema for NPM summary
@@ -174,11 +185,31 @@ function buildReceiptsEnrichmentPrompt(thread: RawThread): string {
 
 From: ${thread.from}
 Subject: ${thread.subject}
-Body: ${thread.body.substring(0, 1500)}
+Body: ${thread.body.substring(0, 2000)}
 
 Provide:
-1. Brief description of what was purchased or paid for
-2. The dollar amount paid if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.`;
+1. Brief description of what was purchased or paid for (merchant name or service)
+2. The total dollar amount paid if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.
+3. Individual line items if the receipt lists them (item name and amount for each). If no itemized list is visible, return an empty array.`;
+}
+
+function buildNewsletterEnrichmentPrompt(thread: RawThread): string {
+  // "View in browser" links are typically at the top or bottom of emails
+  const bodyStart = thread.body.substring(0, 1500);
+  const bodyEnd = thread.body.length > 2000 ? thread.body.substring(thread.body.length - 500) : '';
+
+  return `Find the "view in browser" link in this newsletter email.
+
+From: ${thread.from}
+Subject: ${thread.subject}
+Body (start): ${bodyStart}
+${bodyEnd ? `Body (end): ${bodyEnd}` : ''}
+
+Look for a URL to view this newsletter in a web browser. Common patterns:
+- "View in browser" / "View in your browser"
+- "Read online" / "View this email online"
+
+Return the full URL (starting with http:// or https://) if found, or null if not found.`;
 }
 
 function buildNpmSummaryPrompt(threads: RawThread[]): string {
@@ -338,6 +369,7 @@ const emailDigestBrain = brain({
       childrenInfo: {} as Record<string, ChildrenEmailInfo>,
       billingInfo: {} as Record<string, BillingEmailInfo>,
       receiptsInfo: {} as Record<string, ReceiptsEmailInfo>,
+      newslettersInfo: {} as Record<string, NewsletterEmailInfo>,
       npmSummary: '' as string,
       securityAlertsSummary: '' as string,
       confirmationCodesSummary: '' as string,
@@ -406,11 +438,12 @@ const emailDigestBrain = brain({
     } as any;
   })
 
-  .step('Enrich children, billing, receipts, and notification threads', async ({ state, client }) => {
+  .step('Enrich children, billing, receipts, newsletters, and notification threads', async ({ state, client }) => {
     const threadsById = state.threadsById as unknown as Record<string, RawThread>;
     const childrenIds = state.children as unknown as string[];
     const billingIds = state.billing as unknown as string[];
     const receiptsIds = (state as any).receipts as string[] || [];
+    const newsletterIds = state.newsletters as unknown as string[];
     const npmIds = state.npm as unknown as string[];
     const securityAlertIds = (state as any)['security-alerts'] as string[] || [];
     const confirmationCodeIds = (state as any)['confirmation-codes'] as string[] || [];
@@ -421,6 +454,7 @@ const emailDigestBrain = brain({
     const childrenInfo: Record<string, ChildrenEmailInfo> = {};
     const billingInfo: Record<string, BillingEmailInfo> = {};
     const receiptsInfo: Record<string, ReceiptsEmailInfo> = {};
+    const newslettersInfo: Record<string, NewsletterEmailInfo> = {};
     let npmSummary = '';
     let securityAlertsSummary = '';
     let confirmationCodesSummary = '';
@@ -471,6 +505,21 @@ const emailDigestBrain = brain({
         })
       );
       receiptsInfo[threadId] = result;
+    }
+
+    // Enrich newsletter threads
+    for (const threadId of newsletterIds) {
+      const thread = threadsById[threadId];
+      if (!thread) continue;
+
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildNewsletterEnrichmentPrompt(thread),
+          schema: newsletterEnrichmentSchema,
+          schemaName: 'newsletterEmailInfo',
+        })
+      );
+      newslettersInfo[threadId] = result;
     }
 
     // Generate npm summary
@@ -556,6 +605,7 @@ const emailDigestBrain = brain({
       childrenInfo,
       billingInfo,
       receiptsInfo,
+      newslettersInfo,
       npmSummary,
       securityAlertsSummary,
       confirmationCodesSummary,
@@ -587,6 +637,7 @@ const emailDigestBrain = brain({
       childrenInfo: s.childrenInfo as Record<string, ChildrenEmailInfo>,
       billingInfo: s.billingInfo as Record<string, BillingEmailInfo>,
       receiptsInfo: s.receiptsInfo as Record<string, ReceiptsEmailInfo>,
+      newslettersInfo: s.newslettersInfo as Record<string, NewsletterEmailInfo>,
       npmSummary: s.npmSummary as string,
       securityAlertsSummary: s.securityAlertsSummary as string,
       confirmationCodesSummary: s.confirmationCodesSummary as string,

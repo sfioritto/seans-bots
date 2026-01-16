@@ -1,4 +1,4 @@
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo } from '../types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo } from '../types.js';
 
 interface CategoryConfig {
   id: string;
@@ -106,6 +106,7 @@ function renderReceiptsThreadList(
     if (!thread) return '';
 
     const info = receiptsInfo[threadId];
+    const lineItems = info?.lineItems || [];
 
     return `
       <div class="email-item">
@@ -114,10 +115,50 @@ function renderReceiptsThreadList(
           <div class="email-content">
             <div class="receipts-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
-              ${info?.amount ? `<span class="receipts-amount">${escapeHtml(info.amount)}</span>` : ''}
+              ${info?.totalAmount ? `<span class="receipts-amount">${escapeHtml(info.totalAmount)}</span>` : ''}
             </div>
             <span class="email-from">${escapeHtml(thread.from)}</span>
             ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(thread.snippet)}</span>`}
+            ${lineItems.length > 0 ? `
+              <ul class="receipt-line-items">
+                ${lineItems.map(item => `
+                  <li class="receipt-line-item">
+                    <span class="line-item-name">${escapeHtml(item.item)}</span>
+                    ${item.amount ? `<span class="line-item-amount">${escapeHtml(item.amount)}</span>` : ''}
+                  </li>
+                `).join('')}
+              </ul>
+            ` : ''}
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderNewslettersThreadList(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
+  newslettersInfo: Record<string, NewsletterEmailInfo>
+): string {
+  return threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
+
+    const info = newslettersInfo[threadId];
+    const webLink = info?.webLink;
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <div class="email-content">
+            <div class="newsletter-header">
+              <span class="email-subject">${escapeHtml(thread.subject)}</span>
+              ${webLink ? `<a href="${escapeHtml(webLink)}" target="_blank" class="newsletter-link" onclick="event.stopPropagation();">View</a>` : ''}
+            </div>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+            <span class="email-snippet">${escapeHtml(thread.snippet)}</span>
           </div>
         </label>
       </div>
@@ -594,6 +635,49 @@ export function generateUnifiedPage(
       color: #10b981;
       font-size: 1.1em;
       white-space: nowrap;
+    }
+    .receipt-line-items {
+      margin: 8px 0 0 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0.9em;
+    }
+    .receipt-line-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .receipt-line-item:last-child {
+      border-bottom: none;
+    }
+    .line-item-name {
+      color: #4b5563;
+    }
+    .line-item-amount {
+      color: #10b981;
+      font-weight: 500;
+      margin-left: 10px;
+    }
+    .newsletter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .newsletter-link {
+      font-weight: 600;
+      color: #6366f1;
+      font-size: 0.9em;
+      text-decoration: none;
+      white-space: nowrap;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #eef2ff;
+    }
+    .newsletter-link:hover {
+      background: #c7d2fe;
+      color: #4f46e5;
     }
     .npm-summary-container {
       background: #fef2f2;
@@ -1084,7 +1168,7 @@ export function generateUnifiedPage(
             Select All Newsletters
           </label>
         </div>
-        ${renderThreadList(processed.newsletters, processed.threadsById)}
+        ${renderNewslettersThreadList(processed.newsletters, processed.threadsById, processed.newslettersInfo)}
       </div>
     ` : ''}
 
