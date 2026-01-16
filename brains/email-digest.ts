@@ -173,7 +173,7 @@ function buildBillingEnrichmentPrompt(thread: RawThread): string {
 
 From: ${thread.from}
 Subject: ${thread.subject}
-Body: ${thread.body.substring(0, 1500)}
+Body: ${thread.body}
 
 Provide:
 1. Brief description of what this bill or payment is for
@@ -185,7 +185,7 @@ function buildReceiptsEnrichmentPrompt(thread: RawThread): string {
 
 From: ${thread.from}
 Subject: ${thread.subject}
-Body: ${thread.body.substring(0, 2000)}
+Body: ${thread.body}
 
 Provide:
 1. Brief description of what was purchased or paid for (merchant name or service)
@@ -194,16 +194,11 @@ Provide:
 }
 
 function buildNewsletterEnrichmentPrompt(thread: RawThread): string {
-  // "View in browser" links are typically at the top or bottom of emails
-  const bodyStart = thread.body.substring(0, 1500);
-  const bodyEnd = thread.body.length > 2000 ? thread.body.substring(thread.body.length - 500) : '';
-
   return `Find the "view in browser" link in this newsletter email.
 
 From: ${thread.from}
 Subject: ${thread.subject}
-Body (start): ${bodyStart}
-${bodyEnd ? `Body (end): ${bodyEnd}` : ''}
+Body: ${thread.body}
 
 Look for a URL to view this newsletter in a web browser. Common patterns:
 - "View in browser" / "View in your browser"
@@ -213,7 +208,7 @@ Return the full URL (starting with http:// or https://) if found, or null if not
 }
 
 function buildNpmSummaryPrompt(threads: RawThread[]): string {
-  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body}`).join('\n\n---\n\n');
   return `Here are NPM package publish notifications. Summarize which packages were published and what versions.
 
 Group by package name. If the same package has multiple versions published, list all versions together.
@@ -225,7 +220,7 @@ ${threadBodies}`;
 }
 
 function buildSecurityAlertsSummaryPrompt(threads: RawThread[]): string {
-  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body}`).join('\n\n---\n\n');
   return `Here are security alert emails (sign-in notifications, password changes, new device alerts, etc.).
 
 Summarize them grouped by service. Include:
@@ -241,7 +236,7 @@ ${threadBodies}`;
 }
 
 function buildConfirmationCodesSummaryPrompt(threads: RawThread[]): string {
-  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body}`).join('\n\n---\n\n');
   return `Here are confirmation code / verification emails (OTP codes, 2FA codes, verification links, etc.).
 
 Summarize them grouped by service. Include:
@@ -257,7 +252,7 @@ ${threadBodies}`;
 }
 
 function buildRemindersSummaryPrompt(threads: RawThread[]): string {
-  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body}`).join('\n\n---\n\n');
   return `Here are calendar reminders, event notifications, and appointment reminders.
 
 Summarize them grouped by date/time if available. Include:
@@ -273,7 +268,7 @@ ${threadBodies}`;
 }
 
 function buildFinancialSummaryPrompt(threads: RawThread[]): string {
-  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body}`).join('\n\n---\n\n');
   return `Here are financial notification emails (transaction histories, EOBs, account statements, etc.).
 
 Summarize them grouped by service/company. Include:
@@ -289,7 +284,7 @@ ${threadBodies}`;
 }
 
 function buildShippingSummaryPrompt(threads: RawThread[]): string {
-  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body}`).join('\n\n---\n\n');
   return `Here are shipping notification emails (order shipped, delivery updates, tracking).
 
 Summarize them grouped by sender/company. Include:
@@ -334,7 +329,7 @@ const emailDigestBrain = brain({
           subject: details.subject,
           from: details.from,
           date: details.date,
-          body: details.body.substring(0, 2000),
+          body: details.body,
           snippet: details.snippet,
           messageCount: details.messageCount,
           messageIds: details.messageIds,
@@ -455,6 +450,85 @@ const emailDigestBrain = brain({
     const billingInfo: Record<string, BillingEmailInfo> = {};
     const receiptsInfo: Record<string, ReceiptsEmailInfo> = {};
     const newslettersInfo: Record<string, NewsletterEmailInfo> = {};
+
+    // Build enrichment tasks for all categories
+    type EnrichmentTask = {
+      threadId: string;
+      type: 'children' | 'billing' | 'receipts' | 'newsletters';
+      thread: RawThread;
+    };
+
+    const enrichmentTasks: EnrichmentTask[] = [
+      ...childrenIds.map(threadId => ({ threadId, type: 'children' as const, thread: threadsById[threadId] })),
+      ...billingIds.map(threadId => ({ threadId, type: 'billing' as const, thread: threadsById[threadId] })),
+      ...receiptsIds.map(threadId => ({ threadId, type: 'receipts' as const, thread: threadsById[threadId] })),
+      ...newsletterIds.map(threadId => ({ threadId, type: 'newsletters' as const, thread: threadsById[threadId] })),
+    ].filter(task => task.thread);
+
+    // Process enrichment tasks in batches
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < enrichmentTasks.length; i += BATCH_SIZE) {
+      const batch = enrichmentTasks.slice(i, i + BATCH_SIZE);
+
+      const promises = batch.map(async (task, idx) => {
+        await new Promise((resolve) => setTimeout(resolve, idx * 30));
+
+        if (task.type === 'children') {
+          const result = await withRetry(() =>
+            client.generateObject({
+              prompt: buildChildrenEnrichmentPrompt(task.thread),
+              schema: childrenEnrichmentSchema,
+              schemaName: 'childrenEmailInfo',
+            })
+          );
+          return { ...task, result };
+        } else if (task.type === 'billing') {
+          const result = await withRetry(() =>
+            client.generateObject({
+              prompt: buildBillingEnrichmentPrompt(task.thread),
+              schema: billingEnrichmentSchema,
+              schemaName: 'billingEmailInfo',
+            })
+          );
+          return { ...task, result };
+        } else if (task.type === 'receipts') {
+          const result = await withRetry(() =>
+            client.generateObject({
+              prompt: buildReceiptsEnrichmentPrompt(task.thread),
+              schema: receiptsEnrichmentSchema,
+              schemaName: 'receiptsEmailInfo',
+            })
+          );
+          return { ...task, result };
+        } else {
+          const result = await withRetry(() =>
+            client.generateObject({
+              prompt: buildNewsletterEnrichmentPrompt(task.thread),
+              schema: newsletterEnrichmentSchema,
+              schemaName: 'newsletterEmailInfo',
+            })
+          );
+          return { ...task, result };
+        }
+      });
+
+      const results = await Promise.all(promises);
+
+      for (const { threadId, type, result } of results) {
+        if (type === 'children') {
+          childrenInfo[threadId] = result as ChildrenEmailInfo;
+        } else if (type === 'billing') {
+          billingInfo[threadId] = result as BillingEmailInfo;
+        } else if (type === 'receipts') {
+          receiptsInfo[threadId] = result as ReceiptsEmailInfo;
+        } else {
+          newslettersInfo[threadId] = result as NewsletterEmailInfo;
+        }
+      }
+    }
+
+    // Generate summaries in parallel
+    const summaryPromises: Promise<void>[] = [];
     let npmSummary = '';
     let securityAlertsSummary = '';
     let confirmationCodesSummary = '';
@@ -462,143 +536,91 @@ const emailDigestBrain = brain({
     let financialSummary = '';
     let shippingSummary = '';
 
-    // Enrich children threads
-    for (const threadId of childrenIds) {
-      const thread = threadsById[threadId];
-      if (!thread) continue;
-
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildChildrenEnrichmentPrompt(thread),
-          schema: childrenEnrichmentSchema,
-          schemaName: 'childrenEmailInfo',
-        })
-      );
-      childrenInfo[threadId] = result;
-    }
-
-    // Enrich billing threads
-    for (const threadId of billingIds) {
-      const thread = threadsById[threadId];
-      if (!thread) continue;
-
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildBillingEnrichmentPrompt(thread),
-          schema: billingEnrichmentSchema,
-          schemaName: 'billingEmailInfo',
-        })
-      );
-      billingInfo[threadId] = result;
-    }
-
-    // Enrich receipts threads
-    for (const threadId of receiptsIds) {
-      const thread = threadsById[threadId];
-      if (!thread) continue;
-
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildReceiptsEnrichmentPrompt(thread),
-          schema: receiptsEnrichmentSchema,
-          schemaName: 'receiptsEmailInfo',
-        })
-      );
-      receiptsInfo[threadId] = result;
-    }
-
-    // Enrich newsletter threads
-    for (const threadId of newsletterIds) {
-      const thread = threadsById[threadId];
-      if (!thread) continue;
-
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildNewsletterEnrichmentPrompt(thread),
-          schema: newsletterEnrichmentSchema,
-          schemaName: 'newsletterEmailInfo',
-        })
-      );
-      newslettersInfo[threadId] = result;
-    }
-
-    // Generate npm summary
     if (npmIds.length > 0) {
-      const npmThreads = npmIds.map(threadId => threadsById[threadId]).filter(Boolean);
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildNpmSummaryPrompt(npmThreads),
-          schema: npmSummarySchema,
-          schemaName: 'npmSummary',
-        })
-      );
-      npmSummary = result.summary;
+      summaryPromises.push((async () => {
+        const npmThreads = npmIds.map(threadId => threadsById[threadId]).filter(Boolean);
+        const result = await withRetry(() =>
+          client.generateObject({
+            prompt: buildNpmSummaryPrompt(npmThreads),
+            schema: npmSummarySchema,
+            schemaName: 'npmSummary',
+          })
+        );
+        npmSummary = result.summary;
+      })());
     }
 
-    // Generate security alerts summary
     if (securityAlertIds.length > 0) {
-      const securityThreads = securityAlertIds.map(threadId => threadsById[threadId]).filter(Boolean);
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildSecurityAlertsSummaryPrompt(securityThreads),
-          schema: securityAlertsSummarySchema,
-          schemaName: 'securityAlertsSummary',
-        })
-      );
-      securityAlertsSummary = result.summary;
+      summaryPromises.push((async () => {
+        const securityThreads = securityAlertIds.map(threadId => threadsById[threadId]).filter(Boolean);
+        const result = await withRetry(() =>
+          client.generateObject({
+            prompt: buildSecurityAlertsSummaryPrompt(securityThreads),
+            schema: securityAlertsSummarySchema,
+            schemaName: 'securityAlertsSummary',
+          })
+        );
+        securityAlertsSummary = result.summary;
+      })());
     }
 
-    // Generate confirmation codes summary
     if (confirmationCodeIds.length > 0) {
-      const codeThreads = confirmationCodeIds.map(threadId => threadsById[threadId]).filter(Boolean);
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildConfirmationCodesSummaryPrompt(codeThreads),
-          schema: confirmationCodesSummarySchema,
-          schemaName: 'confirmationCodesSummary',
-        })
-      );
-      confirmationCodesSummary = result.summary;
+      summaryPromises.push((async () => {
+        const codeThreads = confirmationCodeIds.map(threadId => threadsById[threadId]).filter(Boolean);
+        const result = await withRetry(() =>
+          client.generateObject({
+            prompt: buildConfirmationCodesSummaryPrompt(codeThreads),
+            schema: confirmationCodesSummarySchema,
+            schemaName: 'confirmationCodesSummary',
+          })
+        );
+        confirmationCodesSummary = result.summary;
+      })());
     }
 
-    // Generate reminders summary
     if (reminderIds.length > 0) {
-      const reminderThreads = reminderIds.map(threadId => threadsById[threadId]).filter(Boolean);
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildRemindersSummaryPrompt(reminderThreads),
-          schema: remindersSummarySchema,
-          schemaName: 'remindersSummary',
-        })
-      );
-      remindersSummary = result.summary;
+      summaryPromises.push((async () => {
+        const reminderThreads = reminderIds.map(threadId => threadsById[threadId]).filter(Boolean);
+        const result = await withRetry(() =>
+          client.generateObject({
+            prompt: buildRemindersSummaryPrompt(reminderThreads),
+            schema: remindersSummarySchema,
+            schemaName: 'remindersSummary',
+          })
+        );
+        remindersSummary = result.summary;
+      })());
     }
 
-    // Generate financial notifications summary
     if (financialIds.length > 0) {
-      const financialThreads = financialIds.map(threadId => threadsById[threadId]).filter(Boolean);
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildFinancialSummaryPrompt(financialThreads),
-          schema: financialSummarySchema,
-          schemaName: 'financialSummary',
-        })
-      );
-      financialSummary = result.summary;
+      summaryPromises.push((async () => {
+        const financialThreads = financialIds.map(threadId => threadsById[threadId]).filter(Boolean);
+        const result = await withRetry(() =>
+          client.generateObject({
+            prompt: buildFinancialSummaryPrompt(financialThreads),
+            schema: financialSummarySchema,
+            schemaName: 'financialSummary',
+          })
+        );
+        financialSummary = result.summary;
+      })());
     }
 
-    // Generate shipping summary
     if (shippingIds.length > 0) {
-      const shippingThreads = shippingIds.map(threadId => threadsById[threadId]).filter(Boolean);
-      const result = await withRetry(() =>
-        client.generateObject({
-          prompt: buildShippingSummaryPrompt(shippingThreads),
-          schema: shippingSummarySchema,
-          schemaName: 'shippingSummary',
-        })
-      );
-      shippingSummary = result.summary;
+      summaryPromises.push((async () => {
+        const shippingThreads = shippingIds.map(threadId => threadsById[threadId]).filter(Boolean);
+        const result = await withRetry(() =>
+          client.generateObject({
+            prompt: buildShippingSummaryPrompt(shippingThreads),
+            schema: shippingSummarySchema,
+            schemaName: 'shippingSummary',
+          })
+        );
+        shippingSummary = result.summary;
+      })());
     }
+
+    await Promise.all(summaryPromises);
 
     return {
       ...state,
