@@ -10,7 +10,9 @@
       "Bash(npm test:*)",
       "WebFetch(domain:docs.mercury.com)",
       "WebFetch(domain:pypi.org)",
-      "WebFetch(domain:gist.github.com)"
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:sdk.vercel.ai)",
+      "WebFetch(domain:ai-sdk.dev)"
     ],
     "deny": [],
     "ask": []
