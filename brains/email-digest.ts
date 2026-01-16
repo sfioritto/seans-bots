@@ -35,7 +35,7 @@ async function withRetry<T>(
 // Schema for categorization - returns exactly ONE category
 const categorySchema = z.object({
   category: z.enum([
-    'children', 'amazon', 'billing', 'investments',
+    'skip', 'children', 'amazon', 'billing', 'investments',
     'kickstarter', 'newsletters', 'marketing', 'notifications', 'npm',
     'security-alerts', 'confirmation-codes', 'reminders'
   ]),
@@ -74,30 +74,55 @@ const remindersSummarySchema = z.object({
 });
 
 function buildCategorizationPrompt(thread: RawThread): string {
-  return `I am Sean Fioritto. My wife is Beth Fioritto. Her most common email address is beth.lukes@gmail.com. The emails you are reading are from my inbox. My kids are Isaac and Ada.
+  return `I am Sean Fioritto. My wife is Beth Fioritto. Her most common email address is beth.lukes@gmail.com. The emails you are reading are from my inbox. My kids are Isaac and Ada. My sister is Mia Fioritto Rubin.
 
-  Categorize this email into exactly ONE category. Choose the BEST fit.
+Categorize this email into exactly ONE category. Choose the BEST fit.
 
 From: ${thread.from}
 Subject: ${thread.subject}
 Body: ${thread.body}
 
+STEP 1 - CHECK IF THIS IS A NEWSLETTER OR MASS EMAIL:
+Look at the email body content carefully. Is this a newsletter? Signs of a newsletter:
+- Has unsubscribe link or "manage preferences" link
+- Sent to many people (not addressed to me personally in the body)
+- Formatted like a publication (headers, sections, multiple topics)
+- From a mailing list or uses marketing email infrastructure
+- Content is general/broadcast, not specific to me personally
+
+If it's a newsletter, it goes in "newsletters" (or "children" if about kids activities) - NOT skip.
+
+STEP 2 - IF NOT A NEWSLETTER, CHECK FOR SKIP:
+Only use "skip" for emails that are TRULY personal correspondence or important official notices:
+- ALWAYS skip emails from reminder@superhuman.com (these are snoozed emails I intentionally want to see)
+- A real person wrote this specifically to me and expects/deserves a reply
+- It's a personal conversation (back and forth email thread with a person)
+- Important government/official notices (application status, 312 city services, legal)
+- Family forwarding something they want me to see personally
+
+Examples to SKIP: ANY email from reminder@superhuman.com, Beth emailing about vacation plans, Lia responding to my inquiry about childcare availability, "Application Approved" from city/state government, my sister forwarding a flight itinerary she wants me to review
+
+Examples NOT to skip (these are newsletters even if from an individual's name):
+- Derek Sivers' blog posts sent to his mailing list
+- Substack newsletters
+- Any email with unsubscribe links that goes to many subscribers
+
 Categories (pick ONE):
-- children: Emails about MY kids, so Ada and Isaac (school, activities, camps, health, sports, choir, etc.)
+- skip: Truly personal emails requiring my attention/reply, or important official government notices
+- children: Emails about my kids Ada and Isaac (school, activities, camps, health, Nanit reports, etc.)
 - amazon: Amazon orders, shipping, deliveries, returns
 - billing: Bills, receipts, invoices, subscriptions, bank statements, payment confirmations
 - investments: Investment accounts, portfolio updates, dividends, trade confirmations
 - kickstarter: Kickstarter, Indiegogo, crowdfunding updates
-- newsletters: Newsletter subscriptions, periodic digests
-- marketing: Marketing emails, promotions, sales, ads
-- notifications: System notifications, product updates, policy changes, announcements. Notifications are of little value and should not be from clients, customers, friends, family, etc.
+- newsletters: Newsletter subscriptions, periodic digests, Substack, blog digests (even from individuals)
+- marketing: Marketing emails, promotions, sales, ads, follow-up sales emails from businesses
+- notifications: System notifications, product updates, policy changes, announcements from services/apps
 - npm: NPM package publish notifications from npmjs.com, npm registry emails
-- security-alerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts from services like Google, Apple, banks, etc.
-- confirmation-codes: OTP codes, verification codes, 2FA codes, login codes, confirmation emails with numeric codes or verification links
-- reminders: Calendar reminders, event notifications, appointment reminders, upcoming meetings, flight reminders, reservation confirmations with dates, "don't forget" emails
-- Uncategorized: If it's not a great fit in any of the other categories, put it here.
+- security-alerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts
+- confirmation-codes: OTP codes, verification codes, 2FA codes, login codes
+- reminders: Calendar reminders, automated event notifications, appointment reminders
 
-Think about what this email is PRIMARILY about, then choose the single best category.`;
+Think step by step: First, is this a newsletter/mass email? If yes, categorize it appropriately. If no, is this truly personal correspondence or an important official notice? If yes, skip. Otherwise, pick the best category.`;
 }
 
 function buildChildrenEnrichmentPrompt(thread: RawThread): string {
@@ -230,6 +255,7 @@ const emailDigestBrain = brain({
     return {
       ...state,
       threadsById,
+      skip: [] as string[],
       children: [] as string[],
       amazon: [] as string[],
       billing: [] as string[],
@@ -260,6 +286,7 @@ const emailDigestBrain = brain({
     }
 
     const categories: Record<string, string[]> = {
+      skip: [],
       children: [],
       amazon: [],
       billing: [],
