@@ -96,6 +96,10 @@ px deploy
 3. **Error Handling**: Always handle potential errors in brain steps
 4. **Testing**: Write tests for your brains focusing on outcomes, not implementation details (see `/docs/brain-testing-guide.md`)
 
+## Git Commits
+
+Do not include `Co-Authored-By` lines in commit messages.
+
 ## Getting Help
 
 - Documentation: https://positronic.dev
