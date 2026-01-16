@@ -1,4 +1,4 @@
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo } from '../types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo } from '../types.js';
 
 interface CategoryConfig {
   id: string;
@@ -11,6 +11,7 @@ const categories: CategoryConfig[] = [
   { id: 'children', label: 'Children', color: '#ef4444', borderColor: '#dc2626' },
   { id: 'amazon', label: 'Amazon', color: '#ff9900', borderColor: '#e88b00' },
   { id: 'billing', label: 'Billing', color: '#059669', borderColor: '#047857' },
+  { id: 'receipts', label: 'Receipts', color: '#10b981', borderColor: '#059669' },
   { id: 'investments', label: 'Investments', color: '#0891b2', borderColor: '#0e7490' },
   { id: 'kickstarter', label: 'Kickstarter', color: '#05ce78', borderColor: '#04b569' },
   { id: 'newsletters', label: 'Newsletters', color: '#6366f1', borderColor: '#4f46e5' },
@@ -85,6 +86,35 @@ function renderBillingThreadList(
             <div class="billing-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
               ${info?.amount ? `<span class="billing-amount">${escapeHtml(info.amount)}</span>` : ''}
+            </div>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+            ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(thread.snippet)}</span>`}
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderReceiptsThreadList(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
+  receiptsInfo: Record<string, ReceiptsEmailInfo>
+): string {
+  return threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
+
+    const info = receiptsInfo[threadId];
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <div class="email-content">
+            <div class="receipts-header">
+              <span class="email-subject">${escapeHtml(thread.subject)}</span>
+              ${info?.amount ? `<span class="receipts-amount">${escapeHtml(info.amount)}</span>` : ''}
             </div>
             <span class="email-from">${escapeHtml(thread.from)}</span>
             ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(thread.snippet)}</span>`}
@@ -259,6 +289,88 @@ function renderRemindersSection(
   `;
 }
 
+function renderFinancialSection(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
+  financialSummary: string
+): string {
+  const threadList = threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="financial-summary-container">
+      <label class="checkbox-label financial-summary-label">
+        <input type="checkbox" class="select-all-section" data-section="financial-section" checked>
+        <div class="financial-summary-content">
+          <span class="financial-summary-title">Financial</span>
+          <ul class="summary-list">${formatSummaryAsBullets(financialSummary)}</ul>
+        </div>
+      </label>
+    </div>
+    <details class="financial-details">
+      <summary class="financial-details-toggle">${threadIds.length} notification${threadIds.length !== 1 ? 's' : ''}</summary>
+      <div class="financial-emails-list">
+        ${threadList}
+      </div>
+    </details>
+  `;
+}
+
+function renderShippingSection(
+  threadIds: string[],
+  threadsById: Record<string, RawThread>,
+  shippingSummary: string
+): string {
+  const threadList = threadIds.map(threadId => {
+    const thread = threadsById[threadId];
+    if (!thread) return '';
+
+    return `
+      <div class="email-item">
+        <label class="checkbox-label">
+          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <div class="email-content">
+            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <span class="email-from">${escapeHtml(thread.from)}</span>
+          </div>
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="shipping-summary-container">
+      <label class="checkbox-label shipping-summary-label">
+        <input type="checkbox" class="select-all-section" data-section="shipping-section" checked>
+        <div class="shipping-summary-content">
+          <span class="shipping-summary-title">Shipping</span>
+          <ul class="summary-list">${formatSummaryAsBullets(shippingSummary)}</ul>
+        </div>
+      </label>
+    </div>
+    <details class="shipping-details">
+      <summary class="shipping-details-toggle">${threadIds.length} update${threadIds.length !== 1 ? 's' : ''}</summary>
+      <div class="shipping-emails-list">
+        ${threadList}
+      </div>
+    </details>
+  `;
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -285,12 +397,15 @@ export function generateUnifiedPage(
     processed.npm.length +
     processed.securityAlerts.length +
     processed.confirmationCodes.length +
-    processed.reminders.length;
+    processed.reminders.length +
+    processed.financialNotifications.length +
+    processed.shipping.length;
 
   const counts = {
     children: processed.children.length,
     amazon: processed.amazon.length,
     billing: processed.billing.length,
+    receipts: processed.receipts.length,
     investments: processed.investments.length,
     kickstarter: processed.kickstarter.length,
     newsletters: processed.newsletters.length,
@@ -304,6 +419,7 @@ export function generateUnifiedPage(
     ...processed.children,
     ...processed.amazon,
     ...processed.billing,
+    ...processed.receipts,
     ...processed.investments,
     ...processed.kickstarter,
     ...processed.newsletters,
@@ -313,6 +429,8 @@ export function generateUnifiedPage(
     ...processed.securityAlerts,
     ...processed.confirmationCodes,
     ...processed.reminders,
+    ...processed.financialNotifications,
+    ...processed.shipping,
   ];
 
   const activeTabs = categories.filter(cat => counts[cat.id as keyof typeof counts] > 0);
@@ -462,6 +580,18 @@ export function generateUnifiedPage(
     .billing-amount {
       font-weight: 700;
       color: #059669;
+      font-size: 1.1em;
+      white-space: nowrap;
+    }
+    .receipts-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .receipts-amount {
+      font-weight: 700;
+      color: #10b981;
       font-size: 1.1em;
       white-space: nowrap;
     }
@@ -693,6 +823,104 @@ export function generateUnifiedPage(
     .reminders-emails-list .email-item:last-child {
       margin-bottom: 0;
     }
+    .financial-summary-container {
+      background: #eff6ff;
+      border: 1px solid #3b82f6;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .financial-summary-label {
+      align-items: flex-start;
+    }
+    .financial-summary-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .financial-summary-title {
+      font-weight: 700;
+      color: #3b82f6;
+      font-size: 1em;
+    }
+    .financial-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .financial-details-toggle {
+      padding: 12px 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 500;
+      color: #6b7280;
+      user-select: none;
+    }
+    .financial-details-toggle:hover {
+      background: #f3f4f6;
+    }
+    .financial-details[open] .financial-details-toggle {
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .financial-emails-list {
+      padding: 10px;
+    }
+    .financial-emails-list .email-item {
+      margin-bottom: 8px;
+    }
+    .financial-emails-list .email-item:last-child {
+      margin-bottom: 0;
+    }
+    .shipping-summary-container {
+      background: #fff7ed;
+      border: 1px solid #f97316;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    .shipping-summary-label {
+      align-items: flex-start;
+    }
+    .shipping-summary-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .shipping-summary-title {
+      font-weight: 700;
+      color: #f97316;
+      font-size: 1em;
+    }
+    .shipping-details {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .shipping-details-toggle {
+      padding: 12px 15px;
+      background: #f9fafb;
+      cursor: pointer;
+      font-weight: 500;
+      color: #6b7280;
+      user-select: none;
+    }
+    .shipping-details-toggle:hover {
+      background: #f3f4f6;
+    }
+    .shipping-details[open] .shipping-details-toggle {
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .shipping-emails-list {
+      padding: 10px;
+    }
+    .shipping-emails-list .email-item {
+      margin-bottom: 8px;
+    }
+    .shipping-emails-list .email-item:last-child {
+      margin-bottom: 0;
+    }
     .notification-subsection {
       margin-bottom: 20px;
     }
@@ -812,6 +1040,18 @@ export function generateUnifiedPage(
       </div>
     ` : ''}
 
+    ${counts.receipts > 0 ? `
+      <div id="receipts" class="tab-content ${firstActiveTab === 'receipts' ? 'active' : ''}">
+        <div class="select-all-container">
+          <label>
+            <input type="checkbox" class="select-all-tab" data-tab="receipts" checked>
+            Select All Receipts
+          </label>
+        </div>
+        ${renderReceiptsThreadList(processed.receipts, processed.threadsById, processed.receiptsInfo)}
+      </div>
+    ` : ''}
+
     ${counts.investments > 0 ? `
       <div id="investments" class="tab-content ${firstActiveTab === 'investments' ? 'active' : ''}">
         <div class="select-all-container">
@@ -890,6 +1130,18 @@ export function generateUnifiedPage(
         ${processed.reminders.length > 0 ? `
           <div id="reminders-section" class="notification-subsection">
             ${renderRemindersSection(processed.reminders, processed.threadsById, processed.remindersSummary || '')}
+          </div>
+        ` : ''}
+
+        ${processed.financialNotifications.length > 0 ? `
+          <div id="financial-section" class="notification-subsection">
+            ${renderFinancialSection(processed.financialNotifications, processed.threadsById, processed.financialSummary || '')}
+          </div>
+        ` : ''}
+
+        ${processed.shipping.length > 0 ? `
+          <div id="shipping-section" class="notification-subsection">
+            ${renderShippingSection(processed.shipping, processed.threadsById, processed.shippingSummary || '')}
           </div>
         ` : ''}
 

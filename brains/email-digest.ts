@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { brain } from '../brain.js';
 import archiveWebhook from '../webhooks/archive.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo } from './email-digest/types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo } from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';
 
 // Helper for retry with exponential backoff
@@ -35,9 +35,10 @@ async function withRetry<T>(
 // Schema for categorization - returns exactly ONE category
 const categorySchema = z.object({
   category: z.enum([
-    'skip', 'children', 'amazon', 'billing', 'investments',
+    'skip', 'children', 'amazon', 'billing', 'receipts', 'investments',
     'kickstarter', 'newsletters', 'marketing', 'notifications', 'npm',
-    'security-alerts', 'confirmation-codes', 'reminders'
+    'security-alerts', 'confirmation-codes', 'reminders',
+    'financial-notifications', 'shipping'
   ]),
 });
 
@@ -51,6 +52,12 @@ const childrenEnrichmentSchema = z.object({
 const billingEnrichmentSchema = z.object({
   description: z.string().describe('Brief description of what this bill/payment is for'),
   amount: z.string().nullable().describe('The dollar amount if visible in the email (e.g. "$49.99"). Otherwise null.'),
+});
+
+// Schema for receipts email enrichment
+const receiptsEnrichmentSchema = z.object({
+  description: z.string().describe('Brief description of what was purchased/paid'),
+  amount: z.string().nullable().describe('The dollar amount paid (e.g. "$49.99"). Otherwise null.'),
 });
 
 // Schema for NPM summary
@@ -71,6 +78,16 @@ const confirmationCodesSummarySchema = z.object({
 // Schema for reminders summary
 const remindersSummarySchema = z.object({
   summary: z.string().describe('Summary of upcoming events/reminders grouped by date or type, e.g. "Today: dentist 2pm, team sync 4pm; Tomorrow: flight to NYC"'),
+});
+
+// Schema for financial notifications summary
+const financialSummarySchema = z.object({
+  summary: z.string().describe('Summary of financial notifications grouped by service, e.g. "Venmo: December transaction history; UHC: EOB available; Schwab: QQQ dividend"'),
+});
+
+// Schema for shipping notifications summary
+const shippingSummarySchema = z.object({
+  summary: z.string().describe('Summary of shipping updates grouped by sender, e.g. "Apple: AirPods shipped, arriving Jan 18; Amazon: package delivered"'),
 });
 
 function buildCategorizationPrompt(thread: RawThread): string {
@@ -111,16 +128,19 @@ Categories (pick ONE):
 - skip: Truly personal emails requiring my attention/reply, or important official government notices
 - children: Emails about my kids Ada and Isaac (school, activities, camps, health, Nanit reports, etc.)
 - amazon: Amazon orders, shipping, deliveries, returns
-- billing: Bills, receipts, invoices, subscriptions, bank statements, payment confirmations
+- billing: Bills with amounts DUE that need to be paid - invoices, utility bills, service bills, subscription renewal notices with pricing. NOT receipts (things already paid), NOT transaction histories.
+- receipts: Payment confirmations for things already paid - purchase receipts, subscription payment confirmations, proof of coverage/purchase documents, order confirmations showing amount paid
 - investments: Investment accounts, portfolio updates, dividends, trade confirmations
 - kickstarter: Kickstarter, Indiegogo, crowdfunding updates
 - newsletters: Newsletter subscriptions, periodic digests, Substack, blog digests (even from individuals)
 - marketing: Marketing emails, promotions, sales, ads, follow-up sales emails from businesses
-- notifications: System notifications, product updates, policy changes, announcements from services/apps
+- notifications: System notifications, product updates, policy changes, announcements from services/apps (NOT financial, shipping, or security)
 - npm: NPM package publish notifications from npmjs.com, npm registry emails
 - security-alerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts
 - confirmation-codes: OTP codes, verification codes, 2FA codes, login codes
 - reminders: Calendar reminders, automated event notifications, appointment reminders
+- financial-notifications: Transaction histories (Venmo monthly summary), Explanation of Benefits (EOBs), investment notifications, bank account notifications, statement availability notices
+- shipping: Shipment tracking updates, delivery notifications, "your order has shipped" emails, package tracking
 
 Think step by step: First, is this a newsletter/mass email? If yes, categorize it appropriately. If no, is this truly personal correspondence or an important official notice? If yes, skip. Otherwise, pick the best category.`;
 }
@@ -147,6 +167,18 @@ Body: ${thread.body.substring(0, 1500)}
 Provide:
 1. Brief description of what this bill or payment is for
 2. The dollar amount if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.`;
+}
+
+function buildReceiptsEnrichmentPrompt(thread: RawThread): string {
+  return `Analyze this receipt/payment confirmation email.
+
+From: ${thread.from}
+Subject: ${thread.subject}
+Body: ${thread.body.substring(0, 1500)}
+
+Provide:
+1. Brief description of what was purchased or paid for
+2. The dollar amount paid if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.`;
 }
 
 function buildNpmSummaryPrompt(threads: RawThread[]): string {
@@ -209,6 +241,38 @@ Keep it concise - just date, event, and time.
 ${threadBodies}`;
 }
 
+function buildFinancialSummaryPrompt(threads: RawThread[]): string {
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  return `Here are financial notification emails (transaction histories, EOBs, account statements, etc.).
+
+Summarize them grouped by service/company. Include:
+- The service name (Venmo, UHC, bank name, etc.)
+- Type of notification (transaction history, EOB, statement available)
+- Time period if mentioned
+
+Format: "Venmo: December transaction history; UHC: EOB available; Chase: statement ready"
+
+Keep it concise - just service, notification type, and key details.
+
+${threadBodies}`;
+}
+
+function buildShippingSummaryPrompt(threads: RawThread[]): string {
+  const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body.substring(0, 500)}`).join('\n\n---\n\n');
+  return `Here are shipping notification emails (order shipped, delivery updates, tracking).
+
+Summarize them grouped by sender/company. Include:
+- The sender (Apple, Amazon, FedEx, etc.)
+- What was shipped (product name if mentioned)
+- Delivery status or expected date if available
+
+Format: "Apple: AirPods shipped, arriving Jan 18; Amazon: package delivered; FedEx: package in transit"
+
+Keep it concise - just sender, item, and status.
+
+${threadBodies}`;
+}
+
 const emailDigestBrain = brain({
   title: 'email-digest',
   description: 'Categorizes inbox emails and extracts key info like action items and bill amounts',
@@ -259,6 +323,7 @@ const emailDigestBrain = brain({
       children: [] as string[],
       amazon: [] as string[],
       billing: [] as string[],
+      receipts: [] as string[],
       investments: [] as string[],
       kickstarter: [] as string[],
       newsletters: [] as string[],
@@ -268,12 +333,17 @@ const emailDigestBrain = brain({
       securityAlerts: [] as string[],
       confirmationCodes: [] as string[],
       reminders: [] as string[],
+      financialNotifications: [] as string[],
+      shipping: [] as string[],
       childrenInfo: {} as Record<string, ChildrenEmailInfo>,
       billingInfo: {} as Record<string, BillingEmailInfo>,
+      receiptsInfo: {} as Record<string, ReceiptsEmailInfo>,
       npmSummary: '' as string,
       securityAlertsSummary: '' as string,
       confirmationCodesSummary: '' as string,
       remindersSummary: '' as string,
+      financialSummary: '' as string,
+      shippingSummary: '' as string,
     } as any;
   })
 
@@ -290,6 +360,7 @@ const emailDigestBrain = brain({
       children: [],
       amazon: [],
       billing: [],
+      receipts: [],
       investments: [],
       kickstarter: [],
       newsletters: [],
@@ -299,6 +370,8 @@ const emailDigestBrain = brain({
       'security-alerts': [],
       'confirmation-codes': [],
       'reminders': [],
+      'financial-notifications': [],
+      'shipping': [],
     };
 
     const BATCH_SIZE = 20;
@@ -333,21 +406,27 @@ const emailDigestBrain = brain({
     } as any;
   })
 
-  .step('Enrich children, billing, and npm threads', async ({ state, client }) => {
+  .step('Enrich children, billing, receipts, and notification threads', async ({ state, client }) => {
     const threadsById = state.threadsById as unknown as Record<string, RawThread>;
     const childrenIds = state.children as unknown as string[];
     const billingIds = state.billing as unknown as string[];
+    const receiptsIds = (state as any).receipts as string[] || [];
     const npmIds = state.npm as unknown as string[];
     const securityAlertIds = (state as any)['security-alerts'] as string[] || [];
     const confirmationCodeIds = (state as any)['confirmation-codes'] as string[] || [];
     const reminderIds = (state as any)['reminders'] as string[] || [];
+    const financialIds = (state as any)['financial-notifications'] as string[] || [];
+    const shippingIds = (state as any)['shipping'] as string[] || [];
 
     const childrenInfo: Record<string, ChildrenEmailInfo> = {};
     const billingInfo: Record<string, BillingEmailInfo> = {};
+    const receiptsInfo: Record<string, ReceiptsEmailInfo> = {};
     let npmSummary = '';
     let securityAlertsSummary = '';
     let confirmationCodesSummary = '';
     let remindersSummary = '';
+    let financialSummary = '';
+    let shippingSummary = '';
 
     // Enrich children threads
     for (const threadId of childrenIds) {
@@ -377,6 +456,21 @@ const emailDigestBrain = brain({
         })
       );
       billingInfo[threadId] = result;
+    }
+
+    // Enrich receipts threads
+    for (const threadId of receiptsIds) {
+      const thread = threadsById[threadId];
+      if (!thread) continue;
+
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildReceiptsEnrichmentPrompt(thread),
+          schema: receiptsEnrichmentSchema,
+          schemaName: 'receiptsEmailInfo',
+        })
+      );
+      receiptsInfo[threadId] = result;
     }
 
     // Generate npm summary
@@ -431,14 +525,43 @@ const emailDigestBrain = brain({
       remindersSummary = result.summary;
     }
 
+    // Generate financial notifications summary
+    if (financialIds.length > 0) {
+      const financialThreads = financialIds.map(threadId => threadsById[threadId]).filter(Boolean);
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildFinancialSummaryPrompt(financialThreads),
+          schema: financialSummarySchema,
+          schemaName: 'financialSummary',
+        })
+      );
+      financialSummary = result.summary;
+    }
+
+    // Generate shipping summary
+    if (shippingIds.length > 0) {
+      const shippingThreads = shippingIds.map(threadId => threadsById[threadId]).filter(Boolean);
+      const result = await withRetry(() =>
+        client.generateObject({
+          prompt: buildShippingSummaryPrompt(shippingThreads),
+          schema: shippingSummarySchema,
+          schemaName: 'shippingSummary',
+        })
+      );
+      shippingSummary = result.summary;
+    }
+
     return {
       ...state,
       childrenInfo,
       billingInfo,
+      receiptsInfo,
       npmSummary,
       securityAlertsSummary,
       confirmationCodesSummary,
       remindersSummary,
+      financialSummary,
+      shippingSummary,
     } as any;
   })
 
@@ -449,6 +572,7 @@ const emailDigestBrain = brain({
       children: s.children as string[],
       amazon: s.amazon as string[],
       billing: s.billing as string[],
+      receipts: s.receipts as string[] || [],
       investments: s.investments as string[],
       kickstarter: s.kickstarter as string[],
       newsletters: s.newsletters as string[],
@@ -458,18 +582,24 @@ const emailDigestBrain = brain({
       securityAlerts: s['security-alerts'] as string[] || [],
       confirmationCodes: s['confirmation-codes'] as string[] || [],
       reminders: s['reminders'] as string[] || [],
+      financialNotifications: s['financial-notifications'] as string[] || [],
+      shipping: s['shipping'] as string[] || [],
       childrenInfo: s.childrenInfo as Record<string, ChildrenEmailInfo>,
       billingInfo: s.billingInfo as Record<string, BillingEmailInfo>,
+      receiptsInfo: s.receiptsInfo as Record<string, ReceiptsEmailInfo>,
       npmSummary: s.npmSummary as string,
       securityAlertsSummary: s.securityAlertsSummary as string,
       confirmationCodesSummary: s.confirmationCodesSummary as string,
       remindersSummary: s.remindersSummary as string,
+      financialSummary: s.financialSummary as string,
+      shippingSummary: s.shippingSummary as string,
     };
 
     const totalEmails =
       processedData.children.length +
       processedData.amazon.length +
       processedData.billing.length +
+      processedData.receipts.length +
       processedData.investments.length +
       processedData.kickstarter.length +
       processedData.newsletters.length +
@@ -478,7 +608,9 @@ const emailDigestBrain = brain({
       processedData.npm.length +
       processedData.securityAlerts.length +
       processedData.confirmationCodes.length +
-      processedData.reminders.length;
+      processedData.reminders.length +
+      processedData.financialNotifications.length +
+      processedData.shipping.length;
 
     if (totalEmails === 0) {
       return { ...state, sessionId: '', pageUrl: '' };
@@ -510,6 +642,7 @@ const emailDigestBrain = brain({
     const children = (state as any).children as string[];
     const amazon = (state as any).amazon as string[];
     const billing = (state as any).billing as string[];
+    const receipts = (state as any).receipts as string[] || [];
     const investments = (state as any).investments as string[];
     const kickstarter = (state as any).kickstarter as string[];
     const newsletters = (state as any).newsletters as string[];
@@ -519,14 +652,17 @@ const emailDigestBrain = brain({
     const securityAlerts = (state as any)['security-alerts'] as string[] || [];
     const confirmationCodes = (state as any)['confirmation-codes'] as string[] || [];
     const reminders = (state as any)['reminders'] as string[] || [];
+    const financialNotifications = (state as any)['financial-notifications'] as string[] || [];
+    const shipping = (state as any)['shipping'] as string[] || [];
 
     // Combine all notification types for the count
-    const allNotifications = notifications.length + npm.length + securityAlerts.length + confirmationCodes.length + reminders.length;
+    const allNotifications = notifications.length + npm.length + securityAlerts.length + confirmationCodes.length + reminders.length + financialNotifications.length + shipping.length;
 
     const counts = [
       children.length > 0 ? `${children.length} children` : null,
       amazon.length > 0 ? `${amazon.length} Amazon` : null,
       billing.length > 0 ? `${billing.length} billing` : null,
+      receipts.length > 0 ? `${receipts.length} receipts` : null,
       investments.length > 0 ? `${investments.length} investments` : null,
       kickstarter.length > 0 ? `${kickstarter.length} Kickstarter` : null,
       newsletters.length > 0 ? `${newsletters.length} newsletters` : null,
