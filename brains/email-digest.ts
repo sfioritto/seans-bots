@@ -1,7 +1,19 @@
 import { brain } from '../brain.js';
 import archiveWebhook from '../webhooks/archive.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo, FinancialEmailInfo } from './email-digest/types.js';
+import type {
+  ProcessedEmails,
+  RawThread,
+  CategorizedEmail,
+  EmailCategory,
+  EnrichmentData,
+  CategorySummaries,
+  ChildrenEmailInfo,
+  BillingEmailInfo,
+  ReceiptsEmailInfo,
+  NewsletterEmailInfo,
+  FinancialEmailInfo,
+} from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';
 
 // Prompts
@@ -18,15 +30,15 @@ import { summarizeRemindersPrompt } from './email-digest/prompts/summarize-remin
 import { summarizeFinancialPrompt } from './email-digest/prompts/summarize-financial.js';
 import { summarizeShippingPrompt } from './email-digest/prompts/summarize-shipping.js';
 
+// Helper to filter emails by category
+const byCategory = (emails: CategorizedEmail[], category: EmailCategory) =>
+  emails.filter((e) => e.category === category);
+
 const emailDigestBrain = brain({
   title: 'email-digest',
   description: 'Categorizes inbox emails and extracts key info like action items and bill amounts',
 })
-  .brain(
-    'Process Mercury receipt requests',
-    mercuryReceiptsBrain,
-    () => ({}),
-  )
+  .brain('Process Mercury receipt requests', mercuryReceiptsBrain, () => ({}))
 
   .step('Fetch all inbox threads from all accounts', async ({ state, gmail }) => {
     const accounts = gmail.getAccounts();
@@ -40,7 +52,6 @@ const emailDigestBrain = brain({
         const details = await gmail.getThreadDetails(account.refreshToken, thread.threadId);
         threadsById[thread.threadId] = {
           ...details,
-          threadId: thread.threadId,
           accountName: account.name,
         };
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -57,153 +68,80 @@ const emailDigestBrain = brain({
 
   // Batch categorize all threads
   .prompt('Categorize all threads', categorizePrompt, {
-    over: (state) => Object.values(state.threadsById as Record<string, RawThread>),
+    over: (state) => Object.values(state.threadsById),
   })
 
-  // Organize categorization results into separate arrays
-  .step('Organize by category', ({ state }) => {
-    const skip: string[] = [];
-    const children: string[] = [];
-    const amazon: string[] = [];
-    const billing: string[] = [];
-    const receipts: string[] = [];
-    const investments: string[] = [];
-    const kickstarter: string[] = [];
-    const newsletters: string[] = [];
-    const marketing: string[] = [];
-    const notifications: string[] = [];
-    const npm: string[] = [];
-    const securityAlerts: string[] = [];
-    const confirmationCodes: string[] = [];
-    const reminders: string[] = [];
-    const financialNotifications: string[] = [];
-    const shipping: string[] = [];
-
-    const categoryMap: Record<string, string[]> = {
-      skip,
-      children,
-      amazon,
-      billing,
-      receipts,
-      investments,
-      kickstarter,
-      newsletters,
-      marketing,
-      notifications,
-      npm,
-      'security-alerts': securityAlerts,
-      'confirmation-codes': confirmationCodes,
-      reminders,
-      'financial-notifications': financialNotifications,
-      shipping,
-    };
-
-    for (const [thread, result] of state.categorized) {
-      const arr = categoryMap[result.category];
-      if (arr) {
-        arr.push(thread.threadId);
-      }
-    }
+  // Build unified email list from categorization results
+  .step('Build categorized emails', ({ state }) => {
+    const emails: CategorizedEmail[] = state.categorized
+      .filter(([_, result]: [RawThread, { category: EmailCategory }]) => result.category !== 'skip')
+      .map(([thread, result]: [RawThread, { category: EmailCategory }]) => ({
+        thread,
+        category: result.category,
+        enrichment: null as EnrichmentData,
+      }));
 
     return {
       ...state,
-      skip,
-      children,
-      amazon,
-      billing,
-      receipts,
-      investments,
-      kickstarter,
-      newsletters,
-      marketing,
-      notifications,
-      npm,
-      securityAlerts,
-      confirmationCodes,
-      reminders,
-      financialNotifications,
-      shipping,
+      emails,
     };
   })
 
-  // Prepare threads for enrichment by mapping IDs to thread objects
-  .step('Prepare enrichment threads', ({ state }) => {
-    const threadsById = state.threadsById;
-
-    return {
-      ...state,
-      childrenThreads: state.children.map((id) => threadsById[id]).filter(Boolean),
-      billingThreads: state.billing.map((id) => threadsById[id]).filter(Boolean),
-      receiptsThreads: state.receipts.map((id) => threadsById[id]).filter(Boolean),
-      newsletterThreads: state.newsletters.map((id) => threadsById[id]).filter(Boolean),
-      financialThreads: state.financialNotifications.map((id) => threadsById[id]).filter(Boolean),
-      npmThreads: state.npm.map((id) => threadsById[id]).filter(Boolean),
-      securityAlertThreads: state.securityAlerts.map((id) => threadsById[id]).filter(Boolean),
-      confirmationCodeThreads: state.confirmationCodes.map((id) => threadsById[id]).filter(Boolean),
-      reminderThreads: state.reminders.map((id) => threadsById[id]).filter(Boolean),
-      shippingThreads: state.shipping.map((id) => threadsById[id]).filter(Boolean),
-    };
-  })
-
-  // Batch enrich each category
+  // Batch enrich categories that need enrichment
   .prompt('Enrich children emails', enrichChildrenPrompt, {
-    over: (state) => state.childrenThreads as RawThread[],
+    over: (state) => byCategory(state.emails, 'children').map((e) => e.thread),
   })
   .prompt('Enrich billing emails', enrichBillingPrompt, {
-    over: (state) => state.billingThreads as RawThread[],
+    over: (state) => byCategory(state.emails, 'billing').map((e) => e.thread),
   })
   .prompt('Enrich receipt emails', enrichReceiptsPrompt, {
-    over: (state) => state.receiptsThreads as RawThread[],
+    over: (state) => byCategory(state.emails, 'receipts').map((e) => e.thread),
   })
   .prompt('Enrich newsletter emails', enrichNewslettersPrompt, {
-    over: (state) => state.newsletterThreads as RawThread[],
+    over: (state) => byCategory(state.emails, 'newsletters').map((e) => e.thread),
   })
   .prompt('Enrich financial emails', enrichFinancialPrompt, {
-    over: (state) => state.financialThreads as RawThread[],
+    over: (state) => byCategory(state.emails, 'financialNotifications').map((e) => e.thread),
   })
 
-  // Transform enrichment tuples to info objects keyed by threadId
-  // Also clean up intermediate data to reduce state size
-  .step('Transform enrichment results', ({ state }) => {
+  // Merge enrichment data back into unified email list
+  .step('Merge enrichment data', ({ state }) => {
     const childrenEnriched = (state.childrenEnriched || []) as [RawThread, ChildrenEmailInfo][];
     const billingEnriched = (state.billingEnriched || []) as [RawThread, BillingEmailInfo][];
     const receiptsEnriched = (state.receiptsEnriched || []) as [RawThread, ReceiptsEmailInfo][];
     const newslettersEnriched = (state.newslettersEnriched || []) as [RawThread, NewsletterEmailInfo][];
     const financialEnriched = (state.financialEnriched || []) as [RawThread, FinancialEmailInfo][];
 
-    const childrenInfo: Record<string, ChildrenEmailInfo> = {};
-    for (const [thread, info] of childrenEnriched) {
-      childrenInfo[thread.threadId] = info;
-    }
+    // Build lookup maps from enrichment results
+    const childrenMap = new Map(childrenEnriched.map(([t, info]) => [t.threadId, info]));
+    const billingMap = new Map(billingEnriched.map(([t, info]) => [t.threadId, info]));
+    const receiptsMap = new Map(receiptsEnriched.map(([t, info]) => [t.threadId, info]));
+    const newslettersMap = new Map(newslettersEnriched.map(([t, info]) => [t.threadId, info]));
+    const financialMap = new Map(financialEnriched.map(([t, info]) => [t.threadId, info]));
 
-    const billingInfo: Record<string, BillingEmailInfo> = {};
-    for (const [thread, info] of billingEnriched) {
-      billingInfo[thread.threadId] = info;
-    }
+    // Merge enrichment into unified list
+    const enrichedEmails = state.emails.map((email: CategorizedEmail) => {
+      const id = email.thread.threadId;
+      let enrichment: EnrichmentData = null;
 
-    const receiptsInfo: Record<string, ReceiptsEmailInfo> = {};
-    for (const [thread, info] of receiptsEnriched) {
-      receiptsInfo[thread.threadId] = info;
-    }
+      if (childrenMap.has(id)) {
+        enrichment = { type: 'children', info: childrenMap.get(id)! };
+      } else if (billingMap.has(id)) {
+        enrichment = { type: 'billing', info: billingMap.get(id)! };
+      } else if (receiptsMap.has(id)) {
+        enrichment = { type: 'receipts', info: receiptsMap.get(id)! };
+      } else if (newslettersMap.has(id)) {
+        enrichment = { type: 'newsletters', info: newslettersMap.get(id)! };
+      } else if (financialMap.has(id)) {
+        enrichment = { type: 'financial', info: financialMap.get(id)! };
+      }
 
-    const newslettersInfo: Record<string, NewsletterEmailInfo> = {};
-    for (const [thread, info] of newslettersEnriched) {
-      newslettersInfo[thread.threadId] = info;
-    }
+      return { ...email, enrichment };
+    });
 
-    const financialInfo: Record<string, FinancialEmailInfo> = {};
-    for (const [thread, info] of financialEnriched) {
-      financialInfo[thread.threadId] = info;
-    }
-
-    // Clean up intermediate data - keep summary thread arrays for next step
+    // Clean up intermediate enrichment data
     const {
       categorized: _categorized,
-      childrenThreads: _childrenThreads,
-      billingThreads: _billingThreads,
-      receiptsThreads: _receiptsThreads,
-      newsletterThreads: _newsletterThreads,
-      // Keep financialThreads - still needed for summaries
       childrenEnriched: _childrenEnriched,
       billingEnriched: _billingEnriched,
       receiptsEnriched: _receiptsEnriched,
@@ -214,167 +152,123 @@ const emailDigestBrain = brain({
 
     return {
       ...cleanedState,
-      childrenInfo,
-      billingInfo,
-      receiptsInfo,
-      newslettersInfo,
-      financialInfo,
+      emails: enrichedEmails,
     };
   })
 
-  // Generate summaries for categories that need them (conditional, parallel)
+  // Generate summaries for categories that need them
   .step('Generate category summaries', async ({ state, client }) => {
-    const summaries = {
-      npmSummary: '',
-      securityAlertsSummary: '',
-      confirmationCodesSummary: '',
-      remindersSummary: '',
-      financialSummary: '',
-      shippingSummary: '',
-    };
-
+    const { emails } = state;
+    const summaries: CategorySummaries = {};
     const promises: Promise<void>[] = [];
 
-    if (state.npmThreads.length > 0) {
-      promises.push((async () => {
-        const result = await client.generateObject({
-          prompt: summarizeNpmPrompt.template(state.npmThreads),
-          schema: summarizeNpmPrompt.outputSchema.schema,
-          schemaName: summarizeNpmPrompt.outputSchema.name,
-        });
-        summaries.npmSummary = result.summary;
-      })());
+    const npmThreads = byCategory(emails, 'npm').map((e: CategorizedEmail) => e.thread);
+    if (npmThreads.length > 0) {
+      promises.push(
+        (async () => {
+          const result = await client.generateObject({
+            prompt: summarizeNpmPrompt.template(npmThreads),
+            schema: summarizeNpmPrompt.outputSchema.schema,
+            schemaName: summarizeNpmPrompt.outputSchema.name,
+          });
+          summaries.npm = result.summary;
+        })()
+      );
     }
 
-    if (state.securityAlertThreads.length > 0) {
-      promises.push((async () => {
-        const result = await client.generateObject({
-          prompt: summarizeSecurityAlertsPrompt.template(state.securityAlertThreads),
-          schema: summarizeSecurityAlertsPrompt.outputSchema.schema,
-          schemaName: summarizeSecurityAlertsPrompt.outputSchema.name,
-        });
-        summaries.securityAlertsSummary = result.summary;
-      })());
+    const securityAlertThreads = byCategory(emails, 'securityAlerts').map((e: CategorizedEmail) => e.thread);
+    if (securityAlertThreads.length > 0) {
+      promises.push(
+        (async () => {
+          const result = await client.generateObject({
+            prompt: summarizeSecurityAlertsPrompt.template(securityAlertThreads),
+            schema: summarizeSecurityAlertsPrompt.outputSchema.schema,
+            schemaName: summarizeSecurityAlertsPrompt.outputSchema.name,
+          });
+          summaries.securityAlerts = result.summary;
+        })()
+      );
     }
 
-    if (state.confirmationCodeThreads.length > 0) {
-      promises.push((async () => {
-        const result = await client.generateObject({
-          prompt: summarizeConfirmationCodesPrompt.template(state.confirmationCodeThreads),
-          schema: summarizeConfirmationCodesPrompt.outputSchema.schema,
-          schemaName: summarizeConfirmationCodesPrompt.outputSchema.name,
-        });
-        summaries.confirmationCodesSummary = result.summary;
-      })());
+    const confirmationCodeThreads = byCategory(emails, 'confirmationCodes').map((e: CategorizedEmail) => e.thread);
+    if (confirmationCodeThreads.length > 0) {
+      promises.push(
+        (async () => {
+          const result = await client.generateObject({
+            prompt: summarizeConfirmationCodesPrompt.template(confirmationCodeThreads),
+            schema: summarizeConfirmationCodesPrompt.outputSchema.schema,
+            schemaName: summarizeConfirmationCodesPrompt.outputSchema.name,
+          });
+          summaries.confirmationCodes = result.summary;
+        })()
+      );
     }
 
-    if (state.reminderThreads.length > 0) {
-      promises.push((async () => {
-        const result = await client.generateObject({
-          prompt: summarizeRemindersPrompt.template(state.reminderThreads),
-          schema: summarizeRemindersPrompt.outputSchema.schema,
-          schemaName: summarizeRemindersPrompt.outputSchema.name,
-        });
-        summaries.remindersSummary = result.summary;
-      })());
+    const reminderThreads = byCategory(emails, 'reminders').map((e: CategorizedEmail) => e.thread);
+    if (reminderThreads.length > 0) {
+      promises.push(
+        (async () => {
+          const result = await client.generateObject({
+            prompt: summarizeRemindersPrompt.template(reminderThreads),
+            schema: summarizeRemindersPrompt.outputSchema.schema,
+            schemaName: summarizeRemindersPrompt.outputSchema.name,
+          });
+          summaries.reminders = result.summary;
+        })()
+      );
     }
 
-    if (state.financialThreads.length > 0) {
-      promises.push((async () => {
-        const result = await client.generateObject({
-          prompt: summarizeFinancialPrompt.template(state.financialThreads),
-          schema: summarizeFinancialPrompt.outputSchema.schema,
-          schemaName: summarizeFinancialPrompt.outputSchema.name,
-        });
-        summaries.financialSummary = result.summary;
-      })());
+    const financialThreads = byCategory(emails, 'financialNotifications').map((e: CategorizedEmail) => e.thread);
+    if (financialThreads.length > 0) {
+      promises.push(
+        (async () => {
+          const result = await client.generateObject({
+            prompt: summarizeFinancialPrompt.template(financialThreads),
+            schema: summarizeFinancialPrompt.outputSchema.schema,
+            schemaName: summarizeFinancialPrompt.outputSchema.name,
+          });
+          summaries.financial = result.summary;
+        })()
+      );
     }
 
-    if (state.shippingThreads.length > 0) {
-      promises.push((async () => {
-        const result = await client.generateObject({
-          prompt: summarizeShippingPrompt.template(state.shippingThreads),
-          schema: summarizeShippingPrompt.outputSchema.schema,
-          schemaName: summarizeShippingPrompt.outputSchema.name,
-        });
-        summaries.shippingSummary = result.summary;
-      })());
+    const shippingThreads = byCategory(emails, 'shipping').map((e: CategorizedEmail) => e.thread);
+    if (shippingThreads.length > 0) {
+      promises.push(
+        (async () => {
+          const result = await client.generateObject({
+            prompt: summarizeShippingPrompt.template(shippingThreads),
+            schema: summarizeShippingPrompt.outputSchema.schema,
+            schemaName: summarizeShippingPrompt.outputSchema.name,
+          });
+          summaries.shipping = result.summary;
+        })()
+      );
     }
 
     await Promise.all(promises);
 
-    // Clean up summary thread arrays - no longer needed
-    const {
-      npmThreads: _npmThreads,
-      securityAlertThreads: _securityAlertThreads,
-      confirmationCodeThreads: _confirmationCodeThreads,
-      reminderThreads: _reminderThreads,
-      financialThreads: _financialThreads,
-      shippingThreads: _shippingThreads,
-      ...cleanedState
-    } = state;
-
     return {
-      ...cleanedState,
-      ...summaries,
+      ...state,
+      summaries,
     };
   })
 
   .step('Generate unified summary page', async ({ state, pages, env }) => {
-    const processedData: ProcessedEmails = {
-      threadsById: state.threadsById,
-      children: state.children,
-      amazon: state.amazon,
-      billing: state.billing,
-      receipts: state.receipts,
-      investments: state.investments,
-      kickstarter: state.kickstarter,
-      newsletters: state.newsletters,
-      marketing: state.marketing,
-      notifications: state.notifications,
-      npm: state.npm,
-      securityAlerts: state.securityAlerts,
-      confirmationCodes: state.confirmationCodes,
-      reminders: state.reminders,
-      financialNotifications: state.financialNotifications,
-      shipping: state.shipping,
-      childrenInfo: state.childrenInfo,
-      billingInfo: state.billingInfo,
-      receiptsInfo: state.receiptsInfo,
-      newslettersInfo: state.newslettersInfo,
-      financialInfo: state.financialInfo,
-      npmSummary: state.npmSummary,
-      securityAlertsSummary: state.securityAlertsSummary,
-      confirmationCodesSummary: state.confirmationCodesSummary,
-      remindersSummary: state.remindersSummary,
-      financialSummary: state.financialSummary,
-      shippingSummary: state.shippingSummary,
-    };
+    const { emails, summaries } = state;
 
-    const totalEmails =
-      processedData.children.length +
-      processedData.amazon.length +
-      processedData.billing.length +
-      processedData.receipts.length +
-      processedData.investments.length +
-      processedData.kickstarter.length +
-      processedData.newsletters.length +
-      processedData.marketing.length +
-      processedData.notifications.length +
-      processedData.npm.length +
-      processedData.securityAlerts.length +
-      processedData.confirmationCodes.length +
-      processedData.reminders.length +
-      processedData.financialNotifications.length +
-      processedData.shipping.length;
-
-    if (totalEmails === 0) {
+    if (emails.length === 0) {
       return { ...state, sessionId: '', pageUrl: '' };
     }
 
     if (!pages) {
       throw new Error('Pages service not available');
     }
+
+    const processedData: ProcessedEmails = {
+      emails,
+      summaries,
+    };
 
     const sessionId = crypto.randomUUID();
     const slug = `email-digest-${sessionId.slice(0, 8)}`;
@@ -395,24 +289,31 @@ const emailDigestBrain = brain({
       return state;
     }
 
-    const allNotifications =
-      state.notifications.length +
-      state.npm.length +
-      state.securityAlerts.length +
-      state.confirmationCodes.length +
-      state.reminders.length +
-      state.financialNotifications.length +
-      state.shipping.length;
+    const { emails } = state;
+
+    // Count by category
+    const countByCategory = (cat: EmailCategory) => byCategory(emails, cat).length;
+
+    const notificationCategories: EmailCategory[] = [
+      'notifications',
+      'npm',
+      'securityAlerts',
+      'confirmationCodes',
+      'reminders',
+      'financialNotifications',
+      'shipping',
+    ];
+    const allNotifications = notificationCategories.reduce((sum, cat) => sum + countByCategory(cat), 0);
 
     const counts = [
-      state.children.length > 0 ? `${state.children.length} children` : null,
-      state.amazon.length > 0 ? `${state.amazon.length} Amazon` : null,
-      state.billing.length > 0 ? `${state.billing.length} billing` : null,
-      state.receipts.length > 0 ? `${state.receipts.length} receipts` : null,
-      state.investments.length > 0 ? `${state.investments.length} investments` : null,
-      state.kickstarter.length > 0 ? `${state.kickstarter.length} Kickstarter` : null,
-      state.newsletters.length > 0 ? `${state.newsletters.length} newsletters` : null,
-      state.marketing.length > 0 ? `${state.marketing.length} marketing` : null,
+      countByCategory('children') > 0 ? `${countByCategory('children')} children` : null,
+      countByCategory('amazon') > 0 ? `${countByCategory('amazon')} Amazon` : null,
+      countByCategory('billing') > 0 ? `${countByCategory('billing')} billing` : null,
+      countByCategory('receipts') > 0 ? `${countByCategory('receipts')} receipts` : null,
+      countByCategory('investments') > 0 ? `${countByCategory('investments')} investments` : null,
+      countByCategory('kickstarter') > 0 ? `${countByCategory('kickstarter')} Kickstarter` : null,
+      countByCategory('newsletters') > 0 ? `${countByCategory('newsletters')} newsletters` : null,
+      countByCategory('marketing') > 0 ? `${countByCategory('marketing')} marketing` : null,
       allNotifications > 0 ? `${allNotifications} notifications` : null,
     ].filter(Boolean);
 
@@ -447,18 +348,21 @@ const emailDigestBrain = brain({
     }
 
     const selectedThreadIds = new Set(webhookResponse.threadIds);
-    const threadsById = state.threadsById;
+    const { emails } = state;
+
+    // Build lookup from emails
+    const emailsByThreadId = new Map(emails.map((e: CategorizedEmail) => [e.thread.threadId, e]));
 
     // Group message IDs by account name
     const messagesByAccount: Record<string, string[]> = {};
     for (const threadId of selectedThreadIds) {
-      const thread = threadsById[threadId];
-      if (thread) {
-        const key = thread.accountName;
+      const email = emailsByThreadId.get(threadId);
+      if (email) {
+        const key = email.thread.accountName;
         if (!messagesByAccount[key]) {
           messagesByAccount[key] = [];
         }
-        messagesByAccount[key].push(...thread.messageIds);
+        messagesByAccount[key].push(...email.thread.messageIds);
       }
     }
 

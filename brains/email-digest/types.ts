@@ -12,6 +12,25 @@ export interface RawThread {
   accountName: string;
 }
 
+// All possible email categories
+export type EmailCategory =
+  | 'skip'
+  | 'children'
+  | 'amazon'
+  | 'billing'
+  | 'receipts'
+  | 'investments'
+  | 'kickstarter'
+  | 'newsletters'
+  | 'marketing'
+  | 'notifications'
+  | 'npm'
+  | 'securityAlerts'
+  | 'confirmationCodes'
+  | 'reminders'
+  | 'financialNotifications'
+  | 'shipping';
+
 // Enrichment data for specific categories
 export interface ChildrenEmailInfo {
   summary: string;
@@ -44,34 +63,34 @@ export interface FinancialEmailInfo {
   amount: string | null;
 }
 
-// Categories are arrays of thread IDs, with optional enrichment data
+// Discriminated union for enrichment data
+export type EnrichmentData =
+  | { type: 'children'; info: ChildrenEmailInfo }
+  | { type: 'billing'; info: BillingEmailInfo }
+  | { type: 'receipts'; info: ReceiptsEmailInfo }
+  | { type: 'newsletters'; info: NewsletterEmailInfo }
+  | { type: 'financial'; info: FinancialEmailInfo }
+  | null;
+
+// Unified email entry - everything about one email in one place
+export interface CategorizedEmail {
+  thread: RawThread;
+  category: EmailCategory;
+  enrichment: EnrichmentData;
+}
+
+// Category-level summaries (aggregate across threads, not per-thread)
+export interface CategorySummaries {
+  npm?: string;
+  securityAlerts?: string;
+  confirmationCodes?: string;
+  reminders?: string;
+  financial?: string;
+  shipping?: string;
+}
+
+// Simplified ProcessedEmails for the template
 export interface ProcessedEmails {
-  threadsById: Record<string, RawThread>;
-  children: string[];
-  amazon: string[];
-  billing: string[];
-  receipts: string[];
-  investments: string[];
-  kickstarter: string[];
-  newsletters: string[];
-  marketing: string[];
-  notifications: string[];
-  npm: string[];
-  securityAlerts: string[];
-  confirmationCodes: string[];
-  reminders: string[];
-  financialNotifications: string[];
-  shipping: string[];
-  // Enrichment data keyed by thread ID
-  childrenInfo: Record<string, ChildrenEmailInfo>;
-  billingInfo: Record<string, BillingEmailInfo>;
-  receiptsInfo: Record<string, ReceiptsEmailInfo>;
-  newslettersInfo: Record<string, NewsletterEmailInfo>;
-  financialInfo: Record<string, FinancialEmailInfo>;
-  npmSummary?: string;
-  securityAlertsSummary?: string;
-  confirmationCodesSummary?: string;
-  remindersSummary?: string;
-  financialSummary?: string;
-  shippingSummary?: string;
+  emails: CategorizedEmail[];
+  summaries: CategorySummaries;
 }

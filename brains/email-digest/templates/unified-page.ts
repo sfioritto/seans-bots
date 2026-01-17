@@ -1,4 +1,13 @@
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo, FinancialEmailInfo } from '../types.js';
+import type {
+  ProcessedEmails,
+  CategorizedEmail,
+  EmailCategory,
+  ChildrenEmailInfo,
+  BillingEmailInfo,
+  ReceiptsEmailInfo,
+  NewsletterEmailInfo,
+  FinancialEmailInfo,
+} from '../types.js';
 
 interface CategoryConfig {
   id: string;
@@ -19,15 +28,39 @@ const categories: CategoryConfig[] = [
   { id: 'notifications', label: 'Notifications', color: '#8b5cf6', borderColor: '#7c3aed' },
 ];
 
-function renderThreadList(threadIds: string[], threadsById: Record<string, RawThread>): string {
-  return threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
+// Helper to filter emails by category
+const byCategory = (emails: CategorizedEmail[], category: EmailCategory): CategorizedEmail[] =>
+  emails.filter((e) => e.category === category);
 
-    return `
+// Helper to get enrichment data with type narrowing
+function getChildrenEnrichment(email: CategorizedEmail): ChildrenEmailInfo | null {
+  return email.enrichment?.type === 'children' ? email.enrichment.info : null;
+}
+
+function getBillingEnrichment(email: CategorizedEmail): BillingEmailInfo | null {
+  return email.enrichment?.type === 'billing' ? email.enrichment.info : null;
+}
+
+function getReceiptsEnrichment(email: CategorizedEmail): ReceiptsEmailInfo | null {
+  return email.enrichment?.type === 'receipts' ? email.enrichment.info : null;
+}
+
+function getNewslettersEnrichment(email: CategorizedEmail): NewsletterEmailInfo | null {
+  return email.enrichment?.type === 'newsletters' ? email.enrichment.info : null;
+}
+
+function getFinancialEnrichment(email: CategorizedEmail): FinancialEmailInfo | null {
+  return email.enrichment?.type === 'financial' ? email.enrichment.info : null;
+}
+
+function renderThreadList(emails: CategorizedEmail[]): string {
+  return emails
+    .map((email) => {
+      const thread = email.thread;
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <span class="email-subject">${escapeHtml(thread.subject)}</span>
             <span class="email-from">${escapeHtml(thread.from)}</span>
@@ -36,25 +69,21 @@ function renderThreadList(threadIds: string[], threadsById: Record<string, RawTh
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
-function renderChildrenThreadList(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  childrenInfo: Record<string, ChildrenEmailInfo>
-): string {
-  return threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
+function renderChildrenThreadList(emails: CategorizedEmail[]): string {
+  return emails
+    .map((email) => {
+      const thread = email.thread;
+      const info = getChildrenEnrichment(email);
+      const hasAction = info?.actionItem;
 
-    const info = childrenInfo[threadId];
-    const hasAction = info?.actionItem;
-
-    return `
+      return `
       <div class="email-item ${hasAction ? 'has-action' : ''}">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <span class="email-subject">${escapeHtml(thread.subject)}</span>
             <span class="email-from">${escapeHtml(thread.from)}</span>
@@ -64,25 +93,21 @@ function renderChildrenThreadList(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
-function renderBillingThreadList(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  billingInfo: Record<string, BillingEmailInfo>
-): string {
-  return threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
+function renderBillingThreadList(emails: CategorizedEmail[]): string {
+  return emails
+    .map((email) => {
+      const thread = email.thread;
+      const info = getBillingEnrichment(email);
+      const amount = info?.amount?.trim();
 
-    const info = billingInfo[threadId];
-
-    const amount = info?.amount?.trim();
-    return `
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <div class="billing-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
@@ -94,25 +119,21 @@ function renderBillingThreadList(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
-function renderReceiptsThreadList(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  receiptsInfo: Record<string, ReceiptsEmailInfo>
-): string {
-  return threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
+function renderReceiptsThreadList(emails: CategorizedEmail[]): string {
+  return emails
+    .map((email) => {
+      const thread = email.thread;
+      const info = getReceiptsEnrichment(email);
+      const lineItems = info?.lineItems || [];
 
-    const info = receiptsInfo[threadId];
-    const lineItems = info?.lineItems || [];
-
-    return `
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <div class="receipts-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
@@ -120,40 +141,44 @@ function renderReceiptsThreadList(
             </div>
             <span class="email-from">${escapeHtml(thread.from)}</span>
             ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(thread.snippet)}</span>`}
-            ${lineItems.length > 0 ? `
+            ${
+              lineItems.length > 0
+                ? `
               <ul class="receipt-line-items">
-                ${lineItems.map(item => `
+                ${lineItems
+                  .map(
+                    (item) => `
                   <li class="receipt-line-item">
                     <span class="line-item-name">${escapeHtml(item.item)}</span>
                     ${item.amount ? `<span class="line-item-amount">${escapeHtml(item.amount)}</span>` : ''}
                   </li>
-                `).join('')}
+                `
+                  )
+                  .join('')}
               </ul>
-            ` : ''}
+            `
+                : ''
+            }
           </div>
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
-function renderNewslettersThreadList(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  newslettersInfo: Record<string, NewsletterEmailInfo>
-): string {
-  return threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
+function renderNewslettersThreadList(emails: CategorizedEmail[]): string {
+  return emails
+    .map((email) => {
+      const thread = email.thread;
+      const info = getNewslettersEnrichment(email);
+      const webLink = info?.webLink;
+      const unsubscribeLink = info?.unsubscribeLink;
 
-    const info = newslettersInfo[threadId];
-    const webLink = info?.webLink;
-    const unsubscribeLink = info?.unsubscribeLink;
-
-    return `
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <div class="newsletter-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
@@ -168,22 +193,18 @@ function renderNewslettersThreadList(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 }
 
-function renderNpmSection(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  npmSummary: string
-): string {
-  const threadList = threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
-
-    return `
+function renderNpmSection(emails: CategorizedEmail[], npmSummary: string): string {
+  const threadList = emails
+    .map((email) => {
+      const thread = email.thread;
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <span class="email-subject">${escapeHtml(thread.subject)}</span>
             <span class="email-from">${escapeHtml(thread.from)}</span>
@@ -191,7 +212,8 @@ function renderNpmSection(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 
   return `
     <div class="npm-summary-container">
@@ -204,7 +226,7 @@ function renderNpmSection(
       </label>
     </div>
     <details class="npm-details">
-      <summary class="npm-details-toggle">${threadIds.length} notification${threadIds.length !== 1 ? 's' : ''}</summary>
+      <summary class="npm-details-toggle">${emails.length} notification${emails.length !== 1 ? 's' : ''}</summary>
       <div class="npm-emails-list">
         ${threadList}
       </div>
@@ -212,19 +234,14 @@ function renderNpmSection(
   `;
 }
 
-function renderSecurityAlertsSection(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  securityAlertsSummary: string
-): string {
-  const threadList = threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
-
-    return `
+function renderSecurityAlertsSection(emails: CategorizedEmail[], securityAlertsSummary: string): string {
+  const threadList = emails
+    .map((email) => {
+      const thread = email.thread;
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <span class="email-subject">${escapeHtml(thread.subject)}</span>
             <span class="email-from">${escapeHtml(thread.from)}</span>
@@ -232,7 +249,8 @@ function renderSecurityAlertsSection(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 
   return `
     <div class="security-summary-container">
@@ -245,7 +263,7 @@ function renderSecurityAlertsSection(
       </label>
     </div>
     <details class="security-details">
-      <summary class="security-details-toggle">${threadIds.length} alert${threadIds.length !== 1 ? 's' : ''}</summary>
+      <summary class="security-details-toggle">${emails.length} alert${emails.length !== 1 ? 's' : ''}</summary>
       <div class="security-emails-list">
         ${threadList}
       </div>
@@ -253,19 +271,14 @@ function renderSecurityAlertsSection(
   `;
 }
 
-function renderConfirmationCodesSection(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  confirmationCodesSummary: string
-): string {
-  const threadList = threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
-
-    return `
+function renderConfirmationCodesSection(emails: CategorizedEmail[], confirmationCodesSummary: string): string {
+  const threadList = emails
+    .map((email) => {
+      const thread = email.thread;
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <span class="email-subject">${escapeHtml(thread.subject)}</span>
             <span class="email-from">${escapeHtml(thread.from)}</span>
@@ -273,7 +286,8 @@ function renderConfirmationCodesSection(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 
   return `
     <div class="codes-summary-container">
@@ -286,7 +300,7 @@ function renderConfirmationCodesSection(
       </label>
     </div>
     <details class="codes-details">
-      <summary class="codes-details-toggle">${threadIds.length} code${threadIds.length !== 1 ? 's' : ''}</summary>
+      <summary class="codes-details-toggle">${emails.length} code${emails.length !== 1 ? 's' : ''}</summary>
       <div class="codes-emails-list">
         ${threadList}
       </div>
@@ -294,19 +308,14 @@ function renderConfirmationCodesSection(
   `;
 }
 
-function renderRemindersSection(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  remindersSummary: string
-): string {
-  const threadList = threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
-
-    return `
+function renderRemindersSection(emails: CategorizedEmail[], remindersSummary: string): string {
+  const threadList = emails
+    .map((email) => {
+      const thread = email.thread;
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <span class="email-subject">${escapeHtml(thread.subject)}</span>
             <span class="email-from">${escapeHtml(thread.from)}</span>
@@ -314,7 +323,8 @@ function renderRemindersSection(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 
   return `
     <div class="reminders-summary-container">
@@ -327,7 +337,7 @@ function renderRemindersSection(
       </label>
     </div>
     <details class="reminders-details">
-      <summary class="reminders-details-toggle">${threadIds.length} reminder${threadIds.length !== 1 ? 's' : ''}</summary>
+      <summary class="reminders-details-toggle">${emails.length} reminder${emails.length !== 1 ? 's' : ''}</summary>
       <div class="reminders-emails-list">
         ${threadList}
       </div>
@@ -335,22 +345,16 @@ function renderRemindersSection(
   `;
 }
 
-function renderFinancialSection(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  financialInfo: Record<string, FinancialEmailInfo>,
-  financialSummary: string
-): string {
-  const threadList = threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
+function renderFinancialSection(emails: CategorizedEmail[], financialSummary: string): string {
+  const threadList = emails
+    .map((email) => {
+      const thread = email.thread;
+      const info = getFinancialEnrichment(email);
 
-    const info = financialInfo[threadId];
-
-    return `
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <div class="financial-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
@@ -362,7 +366,8 @@ function renderFinancialSection(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 
   return `
     <div class="financial-summary-container">
@@ -375,7 +380,7 @@ function renderFinancialSection(
       </label>
     </div>
     <details class="financial-details">
-      <summary class="financial-details-toggle">${threadIds.length} notification${threadIds.length !== 1 ? 's' : ''}</summary>
+      <summary class="financial-details-toggle">${emails.length} notification${emails.length !== 1 ? 's' : ''}</summary>
       <div class="financial-emails-list">
         ${threadList}
       </div>
@@ -383,19 +388,14 @@ function renderFinancialSection(
   `;
 }
 
-function renderShippingSection(
-  threadIds: string[],
-  threadsById: Record<string, RawThread>,
-  shippingSummary: string
-): string {
-  const threadList = threadIds.map(threadId => {
-    const thread = threadsById[threadId];
-    if (!thread) return '';
-
-    return `
+function renderShippingSection(emails: CategorizedEmail[], shippingSummary: string): string {
+  const threadList = emails
+    .map((email) => {
+      const thread = email.thread;
+      return `
       <div class="email-item">
         <label class="checkbox-label">
-          <input type="checkbox" name="threadIds" value="${threadId}" checked>
+          <input type="checkbox" name="threadIds" value="${thread.threadId}" checked>
           <div class="email-content">
             <span class="email-subject">${escapeHtml(thread.subject)}</span>
             <span class="email-from">${escapeHtml(thread.from)}</span>
@@ -403,7 +403,8 @@ function renderShippingSection(
         </label>
       </div>
     `;
-  }).join('');
+    })
+    .join('');
 
   return `
     <div class="shipping-summary-container">
@@ -416,7 +417,7 @@ function renderShippingSection(
       </label>
     </div>
     <details class="shipping-details">
-      <summary class="shipping-details-toggle">${threadIds.length} update${threadIds.length !== 1 ? 's' : ''}</summary>
+      <summary class="shipping-details-toggle">${emails.length} update${emails.length !== 1 ? 's' : ''}</summary>
       <div class="shipping-emails-list">
         ${threadList}
       </div>
@@ -435,58 +436,47 @@ function escapeHtml(str: string): string {
 
 function formatSummaryAsBullets(summary: string): string {
   if (!summary) return '<li>No summary available</li>';
-  const items = summary.split(';').map(item => item.trim()).filter(Boolean);
-  return items.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  const items = summary
+    .split(';')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.map((item) => `<li>${escapeHtml(item)}</li>`).join('');
 }
 
-export function generateUnifiedPage(
-  processed: ProcessedEmails,
-  sessionId: string,
-  webhookUrl: string
-): string {
-  // Combine all notification types for the tab count
-  const allNotificationsCount =
-    processed.notifications.length +
-    processed.npm.length +
-    processed.securityAlerts.length +
-    processed.confirmationCodes.length +
-    processed.reminders.length +
-    processed.financialNotifications.length +
-    processed.shipping.length;
+export function generateUnifiedPage(processed: ProcessedEmails, sessionId: string, webhookUrl: string): string {
+  const { emails, summaries } = processed;
+
+  // Helper to get emails by category
+  const get = (cat: EmailCategory) => byCategory(emails, cat);
+
+  // Notification categories grouped together
+  const notificationCategories: EmailCategory[] = [
+    'notifications',
+    'npm',
+    'securityAlerts',
+    'confirmationCodes',
+    'reminders',
+    'financialNotifications',
+    'shipping',
+  ];
+  const allNotificationsCount = notificationCategories.reduce((sum, cat) => sum + get(cat).length, 0);
 
   const counts = {
-    children: processed.children.length,
-    amazon: processed.amazon.length,
-    billing: processed.billing.length,
-    receipts: processed.receipts.length,
-    investments: processed.investments.length,
-    kickstarter: processed.kickstarter.length,
-    newsletters: processed.newsletters.length,
-    marketing: processed.marketing.length,
+    children: get('children').length,
+    amazon: get('amazon').length,
+    billing: get('billing').length,
+    receipts: get('receipts').length,
+    investments: get('investments').length,
+    kickstarter: get('kickstarter').length,
+    newsletters: get('newsletters').length,
+    marketing: get('marketing').length,
     notifications: allNotificationsCount,
   };
 
-  const totalThreads = Object.values(counts).reduce((a, b) => a + b, 0);
+  const totalThreads = emails.length;
+  const allThreadIds = emails.map((e) => e.thread.threadId);
 
-  const allThreadIds = [
-    ...processed.children,
-    ...processed.amazon,
-    ...processed.billing,
-    ...processed.receipts,
-    ...processed.investments,
-    ...processed.kickstarter,
-    ...processed.newsletters,
-    ...processed.marketing,
-    ...processed.notifications,
-    ...processed.npm,
-    ...processed.securityAlerts,
-    ...processed.confirmationCodes,
-    ...processed.reminders,
-    ...processed.financialNotifications,
-    ...processed.shipping,
-  ];
-
-  const activeTabs = categories.filter(cat => counts[cat.id as keyof typeof counts] > 0);
+  const activeTabs = categories.filter((cat) => counts[cat.id as keyof typeof counts] > 0);
   const firstActiveTab = activeTabs[0]?.id || 'children';
 
   return `<!DOCTYPE html>
@@ -546,7 +536,7 @@ export function generateUnifiedPage(
     .tab.active .count {
       background: white;
     }
-    ${categories.map(cat => `
+    ${categories.map((cat) => `
     .tab[data-tab="${cat.id}"] { border-left: 3px solid ${cat.color}; }
     .tab[data-tab="${cat.id}"].active { background: ${cat.color}; color: white; }
     `).join('')}
@@ -1120,7 +1110,7 @@ export function generateUnifiedPage(
   </div>
 
   <div class="tabs">
-    ${activeTabs.map(cat => `
+    ${activeTabs.map((cat) => `
       <button class="tab ${cat.id === firstActiveTab ? 'active' : ''}" data-tab="${cat.id}">
         ${cat.label} <span class="count">${counts[cat.id as keyof typeof counts]}</span>
       </button>
@@ -1139,7 +1129,7 @@ export function generateUnifiedPage(
             Select All Children
           </label>
         </div>
-        ${renderChildrenThreadList(processed.children, processed.threadsById, processed.childrenInfo)}
+        ${renderChildrenThreadList(get('children'))}
       </div>
     ` : ''}
 
@@ -1151,7 +1141,7 @@ export function generateUnifiedPage(
             Select All Amazon
           </label>
         </div>
-        ${renderThreadList(processed.amazon, processed.threadsById)}
+        ${renderThreadList(get('amazon'))}
       </div>
     ` : ''}
 
@@ -1163,7 +1153,7 @@ export function generateUnifiedPage(
             Select All Billing
           </label>
         </div>
-        ${renderBillingThreadList(processed.billing, processed.threadsById, processed.billingInfo)}
+        ${renderBillingThreadList(get('billing'))}
       </div>
     ` : ''}
 
@@ -1175,7 +1165,7 @@ export function generateUnifiedPage(
             Select All Receipts
           </label>
         </div>
-        ${renderReceiptsThreadList(processed.receipts, processed.threadsById, processed.receiptsInfo)}
+        ${renderReceiptsThreadList(get('receipts'))}
       </div>
     ` : ''}
 
@@ -1187,7 +1177,7 @@ export function generateUnifiedPage(
             Select All Investments
           </label>
         </div>
-        ${renderThreadList(processed.investments, processed.threadsById)}
+        ${renderThreadList(get('investments'))}
       </div>
     ` : ''}
 
@@ -1199,7 +1189,7 @@ export function generateUnifiedPage(
             Select All Kickstarter
           </label>
         </div>
-        ${renderThreadList(processed.kickstarter, processed.threadsById)}
+        ${renderThreadList(get('kickstarter'))}
       </div>
     ` : ''}
 
@@ -1211,7 +1201,7 @@ export function generateUnifiedPage(
             Select All Newsletters
           </label>
         </div>
-        ${renderNewslettersThreadList(processed.newsletters, processed.threadsById, processed.newslettersInfo)}
+        ${renderNewslettersThreadList(get('newsletters'))}
       </div>
     ` : ''}
 
@@ -1223,7 +1213,7 @@ export function generateUnifiedPage(
             Select All Marketing
           </label>
         </div>
-        ${renderThreadList(processed.marketing, processed.threadsById)}
+        ${renderThreadList(get('marketing'))}
       </div>
     ` : ''}
 
@@ -1236,48 +1226,48 @@ export function generateUnifiedPage(
           </label>
         </div>
 
-        ${processed.npm.length > 0 ? `
+        ${get('npm').length > 0 ? `
           <div id="npm-section" class="notification-subsection">
-            ${renderNpmSection(processed.npm, processed.threadsById, processed.npmSummary || '')}
+            ${renderNpmSection(get('npm'), summaries.npm || '')}
           </div>
         ` : ''}
 
-        ${processed.securityAlerts.length > 0 ? `
+        ${get('securityAlerts').length > 0 ? `
           <div id="security-section" class="notification-subsection">
-            ${renderSecurityAlertsSection(processed.securityAlerts, processed.threadsById, processed.securityAlertsSummary || '')}
+            ${renderSecurityAlertsSection(get('securityAlerts'), summaries.securityAlerts || '')}
           </div>
         ` : ''}
 
-        ${processed.confirmationCodes.length > 0 ? `
+        ${get('confirmationCodes').length > 0 ? `
           <div id="codes-section" class="notification-subsection">
-            ${renderConfirmationCodesSection(processed.confirmationCodes, processed.threadsById, processed.confirmationCodesSummary || '')}
+            ${renderConfirmationCodesSection(get('confirmationCodes'), summaries.confirmationCodes || '')}
           </div>
         ` : ''}
 
-        ${processed.reminders.length > 0 ? `
+        ${get('reminders').length > 0 ? `
           <div id="reminders-section" class="notification-subsection">
-            ${renderRemindersSection(processed.reminders, processed.threadsById, processed.remindersSummary || '')}
+            ${renderRemindersSection(get('reminders'), summaries.reminders || '')}
           </div>
         ` : ''}
 
-        ${processed.financialNotifications.length > 0 ? `
+        ${get('financialNotifications').length > 0 ? `
           <div id="financial-section" class="notification-subsection">
-            ${renderFinancialSection(processed.financialNotifications, processed.threadsById, processed.financialInfo, processed.financialSummary || '')}
+            ${renderFinancialSection(get('financialNotifications'), summaries.financial || '')}
           </div>
         ` : ''}
 
-        ${processed.shipping.length > 0 ? `
+        ${get('shipping').length > 0 ? `
           <div id="shipping-section" class="notification-subsection">
-            ${renderShippingSection(processed.shipping, processed.threadsById, processed.shippingSummary || '')}
+            ${renderShippingSection(get('shipping'), summaries.shipping || '')}
           </div>
         ` : ''}
 
-        ${processed.notifications.length > 0 ? `
+        ${get('notifications').length > 0 ? `
           <div id="other-notifications-section" class="notification-subsection">
             <details class="other-notifications-details" open>
-              <summary class="other-notifications-toggle">Other Notifications (${processed.notifications.length})</summary>
+              <summary class="other-notifications-toggle">Other Notifications (${get('notifications').length})</summary>
               <div class="other-notifications-list">
-                ${renderThreadList(processed.notifications, processed.threadsById)}
+                ${renderThreadList(get('notifications'))}
               </div>
             </details>
           </div>
