@@ -1,4 +1,4 @@
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo } from '../types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo, FinancialEmailInfo } from '../types.js';
 
 interface CategoryConfig {
   id: string;
@@ -78,6 +78,7 @@ function renderBillingThreadList(
 
     const info = billingInfo[threadId];
 
+    const amount = info?.amount?.trim();
     return `
       <div class="email-item">
         <label class="checkbox-label">
@@ -85,7 +86,7 @@ function renderBillingThreadList(
           <div class="email-content">
             <div class="billing-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
-              ${info?.amount ? `<span class="billing-amount">${escapeHtml(info.amount)}</span>` : ''}
+              <span class="billing-amount">${amount ? escapeHtml(amount) : '—'}</span>
             </div>
             <span class="email-from">${escapeHtml(thread.from)}</span>
             ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : `<span class="email-snippet">${escapeHtml(thread.snippet)}</span>`}
@@ -147,6 +148,7 @@ function renderNewslettersThreadList(
 
     const info = newslettersInfo[threadId];
     const webLink = info?.webLink;
+    const unsubscribeLink = info?.unsubscribeLink;
 
     return `
       <div class="email-item">
@@ -155,7 +157,10 @@ function renderNewslettersThreadList(
           <div class="email-content">
             <div class="newsletter-header">
               <span class="email-subject">${escapeHtml(thread.subject)}</span>
-              ${webLink ? `<a href="${escapeHtml(webLink)}" target="_blank" class="newsletter-link" onclick="event.stopPropagation();">View</a>` : ''}
+              <span class="newsletter-links">
+                ${webLink ? `<a href="${escapeHtml(webLink)}" target="_blank" class="newsletter-link" onclick="event.stopPropagation();">View</a>` : ''}
+                ${unsubscribeLink ? `<a href="${escapeHtml(unsubscribeLink)}" target="_blank" class="newsletter-unsub-link" onclick="event.stopPropagation();">Unsub</a>` : ''}
+              </span>
             </div>
             <span class="email-from">${escapeHtml(thread.from)}</span>
             <span class="email-snippet">${escapeHtml(thread.snippet)}</span>
@@ -333,19 +338,26 @@ function renderRemindersSection(
 function renderFinancialSection(
   threadIds: string[],
   threadsById: Record<string, RawThread>,
+  financialInfo: Record<string, FinancialEmailInfo>,
   financialSummary: string
 ): string {
   const threadList = threadIds.map(threadId => {
     const thread = threadsById[threadId];
     if (!thread) return '';
 
+    const info = financialInfo[threadId];
+
     return `
       <div class="email-item">
         <label class="checkbox-label">
           <input type="checkbox" name="threadIds" value="${threadId}" checked>
           <div class="email-content">
-            <span class="email-subject">${escapeHtml(thread.subject)}</span>
+            <div class="financial-header">
+              <span class="email-subject">${escapeHtml(thread.subject)}</span>
+              ${info?.amount ? `<span class="financial-amount">${escapeHtml(info.amount)}</span>` : ''}
+            </div>
             <span class="email-from">${escapeHtml(thread.from)}</span>
+            ${info ? `<span class="email-summary">${escapeHtml(info.description)}</span>` : ''}
           </div>
         </label>
       </div>
@@ -665,6 +677,11 @@ export function generateUnifiedPage(
       align-items: flex-start;
       gap: 10px;
     }
+    .newsletter-links {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
     .newsletter-link {
       font-weight: 600;
       color: #6366f1;
@@ -678,6 +695,20 @@ export function generateUnifiedPage(
     .newsletter-link:hover {
       background: #c7d2fe;
       color: #4f46e5;
+    }
+    .newsletter-unsub-link {
+      font-weight: 600;
+      color: #9ca3af;
+      font-size: 0.9em;
+      text-decoration: none;
+      white-space: nowrap;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #f3f4f6;
+    }
+    .newsletter-unsub-link:hover {
+      background: #e5e7eb;
+      color: #6b7280;
     }
     .npm-summary-container {
       background: #fef2f2;
@@ -956,6 +987,18 @@ export function generateUnifiedPage(
     .financial-emails-list .email-item:last-child {
       margin-bottom: 0;
     }
+    .financial-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .financial-amount {
+      font-weight: 700;
+      color: #3b82f6;
+      font-size: 1.1em;
+      white-space: nowrap;
+    }
     .shipping-summary-container {
       background: #fff7ed;
       border: 1px solid #f97316;
@@ -1219,7 +1262,7 @@ export function generateUnifiedPage(
 
         ${processed.financialNotifications.length > 0 ? `
           <div id="financial-section" class="notification-subsection">
-            ${renderFinancialSection(processed.financialNotifications, processed.threadsById, processed.financialSummary || '')}
+            ${renderFinancialSection(processed.financialNotifications, processed.threadsById, processed.financialInfo, processed.financialSummary || '')}
           </div>
         ` : ''}
 

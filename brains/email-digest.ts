@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { brain } from '../brain.js';
 import archiveWebhook from '../webhooks/archive.js';
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
-import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo } from './email-digest/types.js';
+import type { ProcessedEmails, RawThread, ChildrenEmailInfo, BillingEmailInfo, ReceiptsEmailInfo, NewsletterEmailInfo, FinancialEmailInfo } from './email-digest/types.js';
 import mercuryReceiptsBrain from './mercury-receipts.js';
 
 // Helper for retry with exponential backoff
@@ -51,7 +51,7 @@ const childrenEnrichmentSchema = z.object({
 // Schema for billing email enrichment
 const billingEnrichmentSchema = z.object({
   description: z.string().describe('Brief description of what this bill/payment is for'),
-  amount: z.string().nullable().describe('The dollar amount if visible in the email (e.g. "$49.99"). Otherwise null.'),
+  amount: z.string().describe('The dollar amount owed (e.g. "$544.02", "$99.00"). Extract from Statement Balance, Amount Due, Total Due, or any visible dollar amount. If no amount found, return empty string.'),
 });
 
 // Schema for receipts email enrichment
@@ -68,7 +68,8 @@ const receiptsEnrichmentSchema = z.object({
 
 // Schema for newsletter email enrichment
 const newsletterEnrichmentSchema = z.object({
-  webLink: z.string().nullable().describe('The URL to view this newsletter in a web browser. Look for links like "View in browser", "Read online", "View this email in your browser", "Click here to read online". If no such link exists, return null.'),
+  webLink: z.string().nullish().describe('The URL to view this newsletter in a web browser. Look for links like "View in browser", "Read online", "View this email in your browser", "Click here to read online". If no such link exists, return null.'),
+  unsubscribeLink: z.string().nullish().describe('The URL to unsubscribe from this newsletter. Look for links containing "unsubscribe", "opt out", "manage preferences", "email preferences", "subscription preferences". If no such link exists, return null.'),
 });
 
 // Schema for NPM summary
@@ -89,6 +90,12 @@ const confirmationCodesSummarySchema = z.object({
 // Schema for reminders summary
 const remindersSummarySchema = z.object({
   summary: z.string().describe('Summary of upcoming events/reminders grouped by date or type, e.g. "Today: dentist 2pm, team sync 4pm; Tomorrow: flight to NYC"'),
+});
+
+// Schema for financial email enrichment
+const financialEnrichmentSchema = z.object({
+  description: z.string().describe('Brief description of what this financial notification is about'),
+  amount: z.string().nullable().describe('The dollar amount if visible (e.g. "$49.99", "$1,234.56"). Otherwise null.'),
 });
 
 // Schema for financial notifications summary
@@ -121,14 +128,15 @@ Look at the email body content carefully. Is this a newsletter? Signs of a newsl
 If it's a newsletter, it goes in "newsletters" (or "children" if about kids activities) - NOT skip.
 
 STEP 2 - IF NOT A NEWSLETTER, CHECK FOR SKIP:
-Only use "skip" for emails that are TRULY personal correspondence or important official notices:
+Only use "skip" for emails that are TRULY personal correspondence, important official notices, or calendar invitations:
 - ALWAYS skip emails from reminder@superhuman.com (these are snoozed emails I intentionally want to see)
+- ALWAYS skip calendar invitations (subject starts with "Invitation:" or contains .ics attachments, meeting invites from Google Calendar, Outlook, etc.)
 - A real person wrote this specifically to me and expects/deserves a reply
 - It's a personal conversation (back and forth email thread with a person)
 - Important government/official notices (application status, 312 city services, legal)
 - Family forwarding something they want me to see personally
 
-Examples to SKIP: ANY email from reminder@superhuman.com, Beth emailing about vacation plans, Lia responding to my inquiry about childcare availability, "Application Approved" from city/state government, my sister forwarding a flight itinerary she wants me to review
+Examples to SKIP: ANY email from reminder@superhuman.com, ANY calendar invitation (e.g., "Invitation: Team Meeting @ Mon Jan 20"), Beth emailing about vacation plans, Lia responding to my inquiry about childcare availability, "Application Approved" from city/state government, my sister forwarding a flight itinerary she wants me to review
 
 Examples NOT to skip (these are newsletters even if from an individual's name):
 - Derek Sivers' blog posts sent to his mailing list
@@ -136,8 +144,8 @@ Examples NOT to skip (these are newsletters even if from an individual's name):
 - Any email with unsubscribe links that goes to many subscribers
 
 Categories (pick ONE):
-- skip: Truly personal emails requiring my attention/reply, or important official government notices
-- children: Emails about my kids Ada and Isaac (school, activities, camps, health, Nanit reports, etc.)
+- skip: Truly personal emails requiring my attention/reply, or important official government notices. This includes personal emails from real people specifically to me about my kids (e.g., a teacher emailing me directly, a parent emailing me personally).
+- children: ONLY group or automated emails about my kids Ada and Isaac. Must be one of: (1) emails sent to a GROUP (multiple parents, a class list, etc.) about school/activities/camps, (2) automated system emails (Nanit reports, school portal notifications, activity registration confirmations). Do NOT put personal 1-on-1 emails from a real person here - those go in skip.
 - amazon: Amazon orders, shipping, deliveries, returns
 - billing: Bills with amounts DUE that need to be paid - invoices, utility bills, service bills, subscription renewal notices with pricing. NOT receipts (things already paid), NOT transaction histories.
 - receipts: Payment confirmations for things already paid - purchase receipts, subscription payment confirmations, proof of coverage/purchase documents, order confirmations showing amount paid
@@ -149,11 +157,11 @@ Categories (pick ONE):
 - npm: NPM package publish notifications from npmjs.com, npm registry emails
 - security-alerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts
 - confirmation-codes: OTP codes, verification codes, 2FA codes, login codes
-- reminders: Calendar reminders, automated event notifications, appointment reminders
+- reminders: Automated event reminders, appointment reminders (NOT calendar invitations - those go in skip)
 - financial-notifications: Transaction histories (Venmo monthly summary), Explanation of Benefits (EOBs), investment notifications, bank account notifications, statement availability notices
 - shipping: Shipment tracking updates, delivery notifications, "your order has shipped" emails, package tracking
 
-Think step by step: First, is this a newsletter/mass email? If yes, categorize it appropriately. If no, is this truly personal correspondence or an important official notice? If yes, skip. Otherwise, pick the best category.`;
+Think step by step: First, is this a newsletter/mass email? If yes, categorize it appropriately. If no, is this truly personal correspondence or an important official notice? If yes, skip. For children-related emails specifically: Is this from a real person writing directly to me (skip) OR is it a group email/automated system email (children)?`;
 }
 
 function buildChildrenEnrichmentPrompt(thread: RawThread): string {
@@ -169,15 +177,20 @@ Provide:
 }
 
 function buildBillingEnrichmentPrompt(thread: RawThread): string {
-  return `Analyze this billing/payment email.
+  return `Analyze this billing/payment email and extract the amount owed.
 
 From: ${thread.from}
 Subject: ${thread.subject}
 Body: ${thread.body}
 
 Provide:
-1. Brief description of what this bill or payment is for
-2. The dollar amount if visible (e.g. "$49.99", "$125.00"). If no amount is visible, return null.`;
+1. Brief description of what this bill or payment is for (e.g., "Citi credit card statement", "Electric bill", "Netflix subscription")
+2. The dollar amount - IMPORTANT: You MUST extract any dollar amount you find. Look for:
+   - "Statement Balance" followed by an amount like "$544.02"
+   - "Amount Due" or "Total Due" followed by an amount
+   - "Balance" followed by an amount
+   - Any dollar amount with $ sign
+   Return the amount as a string like "$544.02". Only return empty string if there is truly no dollar amount anywhere.`;
 }
 
 function buildReceiptsEnrichmentPrompt(thread: RawThread): string {
@@ -194,17 +207,36 @@ Provide:
 }
 
 function buildNewsletterEnrichmentPrompt(thread: RawThread): string {
-  return `Find the "view in browser" link in this newsletter email.
+  return `Find links in this newsletter email.
 
 From: ${thread.from}
 Subject: ${thread.subject}
 Body: ${thread.body}
 
-Look for a URL to view this newsletter in a web browser. Common patterns:
-- "View in browser" / "View in your browser"
-- "Read online" / "View this email online"
+Find these two types of links:
 
-Return the full URL (starting with http:// or https://) if found, or null if not found.`;
+1. Web view link - URL to view this newsletter in a web browser. Common patterns:
+   - "View in browser" / "View in your browser"
+   - "Read online" / "View this email online"
+
+2. Unsubscribe link - URL to unsubscribe from this newsletter. Common patterns:
+   - "Unsubscribe" / "Opt out"
+   - "Manage preferences" / "Email preferences"
+   - "Subscription preferences"
+
+Return the full URLs (starting with http:// or https://) if found, or null if not found.`;
+}
+
+function buildFinancialEnrichmentPrompt(thread: RawThread): string {
+  return `Analyze this financial notification email.
+
+From: ${thread.from}
+Subject: ${thread.subject}
+Body: ${thread.body}
+
+Provide:
+1. Brief description of what this financial notification is about (e.g., "Venmo payment received", "EOB for doctor visit", "Dividend payment")
+2. The dollar amount if visible (e.g. "$49.99", "$1,234.56"). Look for transaction amounts, payment amounts, dividend amounts, claim amounts, etc. If no amount is visible, return null.`;
 }
 
 function buildNpmSummaryPrompt(threads: RawThread[]): string {
@@ -450,11 +482,12 @@ const emailDigestBrain = brain({
     const billingInfo: Record<string, BillingEmailInfo> = {};
     const receiptsInfo: Record<string, ReceiptsEmailInfo> = {};
     const newslettersInfo: Record<string, NewsletterEmailInfo> = {};
+    const financialInfo: Record<string, FinancialEmailInfo> = {};
 
     // Build enrichment tasks for all categories
     type EnrichmentTask = {
       threadId: string;
-      type: 'children' | 'billing' | 'receipts' | 'newsletters';
+      type: 'children' | 'billing' | 'receipts' | 'newsletters' | 'financial';
       thread: RawThread;
     };
 
@@ -463,6 +496,7 @@ const emailDigestBrain = brain({
       ...billingIds.map(threadId => ({ threadId, type: 'billing' as const, thread: threadsById[threadId] })),
       ...receiptsIds.map(threadId => ({ threadId, type: 'receipts' as const, thread: threadsById[threadId] })),
       ...newsletterIds.map(threadId => ({ threadId, type: 'newsletters' as const, thread: threadsById[threadId] })),
+      ...financialIds.map(threadId => ({ threadId, type: 'financial' as const, thread: threadsById[threadId] })),
     ].filter(task => task.thread);
 
     // Process enrichment tasks in batches
@@ -500,12 +534,21 @@ const emailDigestBrain = brain({
             })
           );
           return { ...task, result };
-        } else {
+        } else if (task.type === 'newsletters') {
           const result = await withRetry(() =>
             client.generateObject({
               prompt: buildNewsletterEnrichmentPrompt(task.thread),
               schema: newsletterEnrichmentSchema,
               schemaName: 'newsletterEmailInfo',
+            })
+          );
+          return { ...task, result };
+        } else {
+          const result = await withRetry(() =>
+            client.generateObject({
+              prompt: buildFinancialEnrichmentPrompt(task.thread),
+              schema: financialEnrichmentSchema,
+              schemaName: 'financialEmailInfo',
             })
           );
           return { ...task, result };
@@ -521,8 +564,10 @@ const emailDigestBrain = brain({
           billingInfo[threadId] = result as BillingEmailInfo;
         } else if (type === 'receipts') {
           receiptsInfo[threadId] = result as ReceiptsEmailInfo;
-        } else {
+        } else if (type === 'newsletters') {
           newslettersInfo[threadId] = result as NewsletterEmailInfo;
+        } else {
+          financialInfo[threadId] = result as FinancialEmailInfo;
         }
       }
     }
@@ -628,6 +673,7 @@ const emailDigestBrain = brain({
       billingInfo,
       receiptsInfo,
       newslettersInfo,
+      financialInfo,
       npmSummary,
       securityAlertsSummary,
       confirmationCodesSummary,
@@ -660,6 +706,7 @@ const emailDigestBrain = brain({
       billingInfo: s.billingInfo as Record<string, BillingEmailInfo>,
       receiptsInfo: s.receiptsInfo as Record<string, ReceiptsEmailInfo>,
       newslettersInfo: s.newslettersInfo as Record<string, NewsletterEmailInfo>,
+      financialInfo: s.financialInfo as Record<string, FinancialEmailInfo>,
       npmSummary: s.npmSummary as string,
       securityAlertsSummary: s.securityAlertsSummary as string,
       confirmationCodesSummary: s.confirmationCodesSummary as string,

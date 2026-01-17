@@ -21,7 +21,7 @@ export interface ChildrenEmailInfo {
 
 export interface BillingEmailInfo {
   description: string;
-  amount: string | null;
+  amount: string;
 }
 
 export interface ReceiptLineItem {
@@ -37,6 +37,12 @@ export interface ReceiptsEmailInfo {
 
 export interface NewsletterEmailInfo {
   webLink: string | null;
+  unsubscribeLink: string | null;
+}
+
+export interface FinancialEmailInfo {
+  description: string;
+  amount: string | null;
 }
 
 // Categories are arrays of thread IDs, with optional enrichment data
@@ -62,6 +68,7 @@ export interface ProcessedEmails {
   billingInfo: Record<string, BillingEmailInfo>;
   receiptsInfo: Record<string, ReceiptsEmailInfo>;
   newslettersInfo: Record<string, NewsletterEmailInfo>;
+  financialInfo: Record<string, FinancialEmailInfo>;
   npmSummary?: string;
   securityAlertsSummary?: string;
   confirmationCodesSummary?: string;

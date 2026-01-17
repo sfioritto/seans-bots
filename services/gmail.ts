@@ -70,35 +70,43 @@ function decodeBody(data: string | undefined): string {
 
 /**
  * Extract body content from Gmail message payload
+ * Returns both text and HTML versions when available, clearly labeled
  */
 function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
   if (!payload) return '';
 
-  // Try to get body from the main payload
+  // Try to get body from the main payload (single-part message)
   if (payload.body?.data) {
     return decodeBody(payload.body.data);
   }
 
-  // If multipart, try to find text/plain or text/html part
+  // If multipart, extract both text and HTML
   if (payload.parts) {
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/plain' && part.body?.data) {
-        return decodeBody(part.body.data);
+    let textBody = '';
+    let htmlBody = '';
+
+    function findParts(parts: gmail_v1.Schema$MessagePart[]): void {
+      for (const part of parts) {
+        if (part.mimeType === 'text/plain' && part.body?.data && !textBody) {
+          textBody = decodeBody(part.body.data);
+        }
+        if (part.mimeType === 'text/html' && part.body?.data && !htmlBody) {
+          htmlBody = decodeBody(part.body.data);
+        }
+        if (part.parts) {
+          findParts(part.parts);
+        }
       }
     }
 
-    // Fall back to HTML if no plain text
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/html' && part.body?.data) {
-        return decodeBody(part.body.data);
-      }
+    findParts(payload.parts);
+
+    // Return both versions if available, clearly labeled
+    if (textBody && htmlBody) {
+      return `=== TEXT VERSION ===\n${textBody}\n\n=== HTML VERSION ===\n${htmlBody}`;
     }
 
-    // Recursively search nested parts
-    for (const part of payload.parts) {
-      const body = extractBody(part);
-      if (body) return body;
-    }
+    return htmlBody || textBody;
   }
 
   return '';
