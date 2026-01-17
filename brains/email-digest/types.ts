@@ -10,7 +10,6 @@ export interface RawThread {
   messageCount: number;
   messageIds: string[];
   accountName: string;
-  refreshToken: string;
 }
 
 // Enrichment data for specific categories
