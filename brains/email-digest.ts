@@ -157,99 +157,37 @@ const emailDigestBrain = brain({
   })
 
   // Generate summaries for categories that need them
-  .step('Generate category summaries', async ({ state, client }) => {
-    const { emails } = state;
+  .prompt('Summarize npm', summarizeNpmPrompt)
+  .prompt('Summarize security alerts', summarizeSecurityAlertsPrompt)
+  .prompt('Summarize confirmation codes', summarizeConfirmationCodesPrompt)
+  .prompt('Summarize reminders', summarizeRemindersPrompt)
+  .prompt('Summarize financial', summarizeFinancialPrompt)
+  .prompt('Summarize shipping', summarizeShippingPrompt)
+
+  // Merge summaries into final structure
+  .step('Build summaries', ({ state }) => {
     const summaries: CategorySummaries = {};
-    const promises: Promise<void>[] = [];
 
-    const npmThreads = byCategory(emails, 'npm').map((e: CategorizedEmail) => e.thread);
-    if (npmThreads.length > 0) {
-      promises.push(
-        (async () => {
-          const result = await client.generateObject({
-            prompt: summarizeNpmPrompt.template(npmThreads),
-            schema: summarizeNpmPrompt.outputSchema.schema,
-            schemaName: summarizeNpmPrompt.outputSchema.name,
-          });
-          summaries.npm = result.summary;
-        })()
-      );
-    }
+    if (state.npmSummary?.summary) summaries.npm = state.npmSummary.summary;
+    if (state.securityAlertsSummary?.summary) summaries.securityAlerts = state.securityAlertsSummary.summary;
+    if (state.confirmationCodesSummary?.summary) summaries.confirmationCodes = state.confirmationCodesSummary.summary;
+    if (state.remindersSummary?.summary) summaries.reminders = state.remindersSummary.summary;
+    if (state.financialSummary?.summary) summaries.financial = state.financialSummary.summary;
+    if (state.shippingSummary?.summary) summaries.shipping = state.shippingSummary.summary;
 
-    const securityAlertThreads = byCategory(emails, 'securityAlerts').map((e: CategorizedEmail) => e.thread);
-    if (securityAlertThreads.length > 0) {
-      promises.push(
-        (async () => {
-          const result = await client.generateObject({
-            prompt: summarizeSecurityAlertsPrompt.template(securityAlertThreads),
-            schema: summarizeSecurityAlertsPrompt.outputSchema.schema,
-            schemaName: summarizeSecurityAlertsPrompt.outputSchema.name,
-          });
-          summaries.securityAlerts = result.summary;
-        })()
-      );
-    }
-
-    const confirmationCodeThreads = byCategory(emails, 'confirmationCodes').map((e: CategorizedEmail) => e.thread);
-    if (confirmationCodeThreads.length > 0) {
-      promises.push(
-        (async () => {
-          const result = await client.generateObject({
-            prompt: summarizeConfirmationCodesPrompt.template(confirmationCodeThreads),
-            schema: summarizeConfirmationCodesPrompt.outputSchema.schema,
-            schemaName: summarizeConfirmationCodesPrompt.outputSchema.name,
-          });
-          summaries.confirmationCodes = result.summary;
-        })()
-      );
-    }
-
-    const reminderThreads = byCategory(emails, 'reminders').map((e: CategorizedEmail) => e.thread);
-    if (reminderThreads.length > 0) {
-      promises.push(
-        (async () => {
-          const result = await client.generateObject({
-            prompt: summarizeRemindersPrompt.template(reminderThreads),
-            schema: summarizeRemindersPrompt.outputSchema.schema,
-            schemaName: summarizeRemindersPrompt.outputSchema.name,
-          });
-          summaries.reminders = result.summary;
-        })()
-      );
-    }
-
-    const financialThreads = byCategory(emails, 'financialNotifications').map((e: CategorizedEmail) => e.thread);
-    if (financialThreads.length > 0) {
-      promises.push(
-        (async () => {
-          const result = await client.generateObject({
-            prompt: summarizeFinancialPrompt.template(financialThreads),
-            schema: summarizeFinancialPrompt.outputSchema.schema,
-            schemaName: summarizeFinancialPrompt.outputSchema.name,
-          });
-          summaries.financial = result.summary;
-        })()
-      );
-    }
-
-    const shippingThreads = byCategory(emails, 'shipping').map((e: CategorizedEmail) => e.thread);
-    if (shippingThreads.length > 0) {
-      promises.push(
-        (async () => {
-          const result = await client.generateObject({
-            prompt: summarizeShippingPrompt.template(shippingThreads),
-            schema: summarizeShippingPrompt.outputSchema.schema,
-            schemaName: summarizeShippingPrompt.outputSchema.name,
-          });
-          summaries.shipping = result.summary;
-        })()
-      );
-    }
-
-    await Promise.all(promises);
+    // Clean up intermediate summary data
+    const {
+      npmSummary: _npmSummary,
+      securityAlertsSummary: _securityAlertsSummary,
+      confirmationCodesSummary: _confirmationCodesSummary,
+      remindersSummary: _remindersSummary,
+      financialSummary: _financialSummary,
+      shippingSummary: _shippingSummary,
+      ...cleanedState
+    } = state;
 
     return {
-      ...state,
+      ...cleanedState,
       summaries,
     };
   })

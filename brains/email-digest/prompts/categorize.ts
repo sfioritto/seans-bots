@@ -48,10 +48,10 @@ Categories (pick ONE):
 - marketing: Marketing emails, promotions, sales, ads, follow-up sales emails from businesses
 - notifications: System notifications, product updates, policy changes, announcements from services/apps (NOT financial, shipping, or security)
 - npm: NPM package publish notifications from npmjs.com, npm registry emails
-- security-alerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts
-- confirmation-codes: OTP codes, verification codes, 2FA codes, login codes
+- securityAlerts: Sign-in notifications, login alerts, password change alerts, security warnings, "new device" alerts
+- confirmationCodes: OTP codes, verification codes, 2FA codes, login codes
 - reminders: Automated event reminders, appointment reminders (NOT calendar invitations - those go in skip)
-- financial-notifications: Transaction histories (Venmo monthly summary), Explanation of Benefits (EOBs), investment notifications, bank account notifications, statement availability notices
+- financialNotifications: Transaction histories (Venmo monthly summary), Explanation of Benefits (EOBs), investment notifications, bank account notifications, statement availability notices
 - shipping: Shipment tracking updates, delivery notifications, "your order has shipped" emails, package tracking
 
 Think step by step: First, is this a newsletter/mass email? If yes, categorize it appropriately. If no, is this truly personal correspondence or an important official notice? If yes, skip. For children-related emails specifically: Is this from a real person writing directly to me (skip) OR is it a group email/automated system email (children)?`,
@@ -60,8 +60,8 @@ Think step by step: First, is this a newsletter/mass email? If yes, categorize i
       category: z.enum([
         'skip', 'children', 'amazon', 'billing', 'receipts', 'investments',
         'kickstarter', 'newsletters', 'marketing', 'notifications', 'npm',
-        'security-alerts', 'confirmation-codes', 'reminders',
-        'financial-notifications', 'shipping'
+        'securityAlerts', 'confirmationCodes', 'reminders',
+        'financialNotifications', 'shipping'
       ]),
     }),
     name: 'categorized' as const,
