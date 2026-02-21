@@ -25,4 +25,3 @@ coverage/
 .positronic-server.pid
 
 resources.d.ts
-secrets.d.ts
