@@ -14,10 +14,11 @@
   "dependencies": {
     "@ai-sdk/google": "^3.0.30",
     "@ai-sdk/openai": "^3.0.30",
-    "@positronic/client-vercel": "^0.0.62",
-    "@positronic/cloudflare": "^0.0.62",
-    "@positronic/core": "^0.0.62",
-    "@positronic/gen-ui-components": "^0.0.62",
+    "@positronic/client-vercel": "^0.0.63",
+    "@positronic/cloudflare": "^0.0.63",
+    "@positronic/core": "^0.0.63",
+    "@positronic/gen-ui-components": "^0.0.63",
+    "@positronic/mem0": "^0.0.63",
     "ai": "^6.0.0"
   },
   "devDependencies": {
