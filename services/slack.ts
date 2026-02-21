@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 const SLACK_API_BASE = 'https://slack.com/api';
 
 interface SlackMessageResult {
@@ -102,4 +104,68 @@ export default {
   sendMessage,
   openDM,
   postThread,
+};
+
+// =============================================================================
+// AI-callable tools
+// =============================================================================
+
+export const slackSendMessage = {
+  description: 'Send a message to a Slack channel or thread',
+  inputSchema: z.object({
+    channel: z.string().describe('Channel ID or name (e.g., "#general" or "C1234567890")'),
+    text: z.string().describe('The message text to send'),
+    threadTs: z.string().optional().describe('Thread timestamp to reply to (for threaded messages)'),
+    unfurlLinks: z.boolean().optional().describe('Whether to unfurl links in the message'),
+    unfurlMedia: z.boolean().optional().describe('Whether to unfurl media in the message'),
+  }),
+  execute: async (input: {
+    channel: string;
+    text: string;
+    threadTs?: string;
+    unfurlLinks?: boolean;
+    unfurlMedia?: boolean;
+  }) => {
+    return sendMessage(input.channel, input.text, {
+      threadTs: input.threadTs,
+      unfurlLinks: input.unfurlLinks,
+      unfurlMedia: input.unfurlMedia,
+    });
+  },
+};
+
+export const slackOpenDM = {
+  description: 'Open a direct message channel with a Slack user',
+  inputSchema: z.object({
+    userId: z.string().describe('The Slack user ID to open a DM with'),
+  }),
+  execute: async (input: { userId: string }) => {
+    return openDM(input.userId);
+  },
+};
+
+export const slackPostThread = {
+  description: 'Post a main message followed by thread replies',
+  inputSchema: z.object({
+    channel: z.string().describe('Channel ID or name'),
+    mainMessage: z.string().describe('The main message text'),
+    threadMessages: z.array(z.object({
+      text: z.string().describe('Thread reply text'),
+      unfurlLinks: z.boolean().optional(),
+      unfurlMedia: z.boolean().optional(),
+    })).describe('Array of messages to post as thread replies'),
+  }),
+  execute: async (input: {
+    channel: string;
+    mainMessage: string;
+    threadMessages: Array<{ text: string; unfurlLinks?: boolean; unfurlMedia?: boolean }>;
+  }) => {
+    return postThread(input.channel, input.mainMessage, input.threadMessages);
+  },
+};
+
+export const slackTools = {
+  slackSendMessage,
+  slackOpenDM,
+  slackPostThread,
 };

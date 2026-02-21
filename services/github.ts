@@ -3,6 +3,8 @@
  * Uses GitHub REST API v3 with personal access token
  */
 
+import { z } from 'zod';
+
 interface FileChange {
   filename: string;
   status: string; // added, modified, removed, renamed
@@ -451,3 +453,97 @@ export const github = {
 };
 
 export default github;
+
+// =============================================================================
+// AI-callable tools
+// =============================================================================
+
+export const githubGetRepoList = {
+  description: 'Get the list of configured GitHub repositories to analyze',
+  inputSchema: z.object({}),
+  execute: async () => {
+    return getRepoList();
+  },
+};
+
+export const githubGetCommits = {
+  description: 'Fetch commits for a repository within a date range',
+  inputSchema: z.object({
+    owner: z.string().describe('Repository owner (e.g., "octocat")'),
+    repo: z.string().describe('Repository name (e.g., "Hello-World")'),
+    since: z.string().describe('ISO 8601 date string for start of range (e.g., "2024-01-01T00:00:00Z")'),
+    until: z.string().describe('ISO 8601 date string for end of range (e.g., "2024-01-31T23:59:59Z")'),
+  }),
+  execute: async (input: { owner: string; repo: string; since: string; until: string }) => {
+    return getCommits(input.owner, input.repo, input.since, input.until);
+  },
+};
+
+export const githubGetMergedPRs = {
+  description: 'Fetch merged pull requests for a repository since a given date',
+  inputSchema: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    since: z.string().describe('ISO 8601 date string - fetch PRs merged after this date'),
+  }),
+  execute: async (input: { owner: string; repo: string; since: string }) => {
+    return getMergedPRs(input.owner, input.repo, new Date(input.since));
+  },
+};
+
+export const githubGetChangelog = {
+  description: 'Fetch the CHANGELOG.md content for a repository',
+  inputSchema: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+  }),
+  execute: async (input: { owner: string; repo: string }) => {
+    return getChangelog(input.owner, input.repo);
+  },
+};
+
+export const githubGetCommitStats = {
+  description: 'Fetch detailed stats (additions, deletions, file changes) for a specific commit',
+  inputSchema: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    sha: z.string().describe('The commit SHA'),
+  }),
+  execute: async (input: { owner: string; repo: string; sha: string }) => {
+    return getCommitStats(input.owner, input.repo, input.sha);
+  },
+};
+
+export const githubGetPRReviewComments = {
+  description: 'Fetch PR review comments (comments on diffs) for a repository since a given date',
+  inputSchema: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    since: z.string().describe('ISO 8601 date string - fetch comments after this date'),
+  }),
+  execute: async (input: { owner: string; repo: string; since: string }) => {
+    return getPRReviewComments(input.owner, input.repo, new Date(input.since));
+  },
+};
+
+export const githubGetPRReviews = {
+  description: 'Fetch PR reviews (approvals, changes requested) for a repository since a given date',
+  inputSchema: z.object({
+    owner: z.string().describe('Repository owner'),
+    repo: z.string().describe('Repository name'),
+    since: z.string().describe('ISO 8601 date string - fetch reviews after this date'),
+  }),
+  execute: async (input: { owner: string; repo: string; since: string }) => {
+    return getPRReviews(input.owner, input.repo, new Date(input.since));
+  },
+};
+
+export const githubTools = {
+  githubGetRepoList,
+  githubGetCommits,
+  githubGetMergedPRs,
+  githubGetChangelog,
+  githubGetCommitStats,
+  githubGetPRReviewComments,
+  githubGetPRReviews,
+};
