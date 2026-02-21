@@ -11,6 +11,6 @@
     "outDir": "./dist",
     "rootDir": "./"
   },
-  "include": ["brains/**/*.ts", "resources.d.ts"],
+  "include": ["brains/**/*.ts", "components/**/*.ts", "services/**/*.ts", "brain.ts", "runner.ts", "resources.d.ts"],
   "exclude": ["node_modules", ".positronic"]
 }
