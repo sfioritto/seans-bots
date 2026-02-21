@@ -15,7 +15,7 @@ import type {
 const google = createGoogleGenerativeAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
-const geminiClient = new VercelClient(google('gemini-3-pro-preview'));
+const geminiClient = new VercelClient(google('gemini-3-flash-preview'));
 
 // Schema for identifying Mercury request threads and extracting details
 const mercuryIdentificationSchema = z.object({

@@ -99,7 +99,7 @@ const importantEmailsBrain = brain({
   })
 
   // Step 2: Use a loop to let the LLM analyze threads and find important ones
-  .loop('Find important threads', ({ state, ntfy, pages, env }) => {
+  .brain('Find important threads', ({ state, ntfy, pages, env }) => {
     const threads = (state.threads || []) as Array<{
       threadId: string;
       accountIndex: number;
