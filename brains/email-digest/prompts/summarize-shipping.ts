@@ -1,29 +1,17 @@
 import { z } from 'zod';
-import type { CategorizedEmail } from '../types.js';
+import type { RawThread } from '../types.js';
 
 export const summarizeShippingPrompt = {
-  template: (state: { emails: CategorizedEmail[] }) => {
-    const threads = state.emails.filter((e) => e.category === 'shipping').map((e) => e.thread);
-    if (threads.length === 0) {
-      return 'No shipping notification emails. Return an empty string for summary.';
-    }
-    const threadBodies = threads.map(t => `Subject: ${t.subject}\nBody: ${t.body}`).join('\n\n---\n\n');
-    return `Here are shipping notification emails (order shipped, delivery updates, tracking).
+  template: (thread: RawThread) => `Summarize this shipping notification in one short line.
 
-Summarize them grouped by sender/company. Include:
-- The sender (Apple, Amazon, FedEx, etc.)
-- What was shipped (product name if mentioned)
-- Delivery status or expected date if available
+From: ${thread.from}
+Subject: ${thread.subject}
+Body: ${thread.body}
 
-Format: "Apple: AirPods shipped, arriving Jan 18; Amazon: package delivered; FedEx: package in transit"
-
-Keep it concise - just sender, item, and status.
-
-${threadBodies}`;
-  },
+Format: "Sender: item, status" (e.g. "Apple: AirPods shipped, arriving Jan 18")`,
   outputSchema: {
     schema: z.object({
-      summary: z.string().describe('Summary of shipping updates grouped by sender, e.g. "Apple: AirPods shipped, arriving Jan 18; Amazon: package delivered". Empty string if no emails.'),
+      summary: z.string().describe('One-line shipping summary, e.g. "Apple: AirPods shipped, arriving Jan 18"'),
     }),
     name: 'shippingSummary' as const,
   },

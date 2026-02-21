@@ -1,5 +1,11 @@
 import { brain } from '../brain.js';
+import { VercelClient } from '@positronic/client-vercel';
+import { google } from '@ai-sdk/google';
 import archiveWebhook from '../webhooks/archive.js';
+import gmail from '../services/gmail.js';
+import ntfy from '../services/ntfy.js';
+
+const liteClient = new VercelClient(google('gemini-flash-lite-latest'));
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
 import type {
   ProcessedEmails,
@@ -13,8 +19,8 @@ import type {
   ReceiptsEmailInfo,
   NewsletterEmailInfo,
   FinancialEmailInfo,
+  ShippingEmailInfo,
 } from './email-digest/types.js';
-import mercuryReceiptsBrain from './mercury-receipts.js';
 
 // Prompts
 import { categorizePrompt } from './email-digest/prompts/categorize.js';
@@ -28,51 +34,101 @@ import { summarizeSecurityAlertsPrompt } from './email-digest/prompts/summarize-
 import { summarizeConfirmationCodesPrompt } from './email-digest/prompts/summarize-confirmation-codes.js';
 import { summarizeRemindersPrompt } from './email-digest/prompts/summarize-reminders.js';
 import { summarizeFinancialPrompt } from './email-digest/prompts/summarize-financial.js';
+import { enrichShippingPrompt } from './email-digest/prompts/enrich-shipping.js';
 import { summarizeShippingPrompt } from './email-digest/prompts/summarize-shipping.js';
 
 // Helper to filter emails by category
 const byCategory = (emails: CategorizedEmail[], category: EmailCategory) =>
   emails.filter((e) => e.category === category);
 
+// Re-fetch a thread's body on-demand (not stored in state)
+async function fetchBody(threadId: string, refreshToken: string): Promise<string> {
+  const details = await gmail.getThreadDetails(refreshToken, threadId);
+  return details.body;
+}
+
+// For summarize prompts: hydrate bodies for a specific category's threads
+async function withBodies(state: any, category: EmailCategory): Promise<any> {
+  return {
+    ...state,
+    emails: await Promise.all(
+      state.emails.map(async (e: any) => {
+        if (e.category === category) {
+          const body = await fetchBody(
+            e.thread.threadId,
+            state.refreshTokensByThread[e.thread.threadId],
+          );
+          return { ...e, thread: { ...e.thread, body } };
+        }
+        return e;
+      }),
+    ),
+  };
+}
+
 const emailDigestBrain = brain({
   title: 'email-digest',
   description: 'Categorizes inbox emails and extracts key info like action items and bill amounts',
 })
-  .brain('Process Mercury receipt requests', mercuryReceiptsBrain, () => ({}))
-
-  .step('Fetch all inbox threads from all accounts', async ({ state, gmail }) => {
+  .step('Fetch all inbox threads from all accounts', async ({ state }) => {
     const accounts = gmail.getAccounts();
     const threadsById: Record<string, RawThread> = {};
+    const refreshTokensByThread: Record<string, string> = {};
     const query = 'label:inbox';
 
     for (const account of accounts) {
-      const threads = await gmail.searchThreads(account.refreshToken, query, 100);
+      const threads = await gmail.searchThreads(account.refreshToken, query);
+      console.log(`[email-digest] ${account.name}: ${threads.length} threads found`);
 
-      for (const thread of threads) {
-        const details = await gmail.getThreadDetails(account.refreshToken, thread.threadId);
-        threadsById[thread.threadId] = {
-          ...details,
-          accountName: account.name,
-        };
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      for (let i = 0; i < threads.length; i++) {
+        try {
+          const metadata = await gmail.getThreadMetadata(account.refreshToken, threads[i].threadId);
+          threadsById[threads[i].threadId] = {
+            ...metadata,
+            body: '',  // Not fetched here — re-fetched on-demand in prompts
+            accountName: account.name,
+          };
+          refreshTokensByThread[threads[i].threadId] = account.refreshToken;
+        } catch (error) {
+          console.error(`[email-digest] ${account.name}: ERROR fetching thread ${i + 1}/${threads.length} (${threads[i].threadId}): ${error}`);
+        }
+        if ((i + 1) % 10 === 0) {
+          console.log(`[email-digest] ${account.name}: fetched ${i + 1}/${threads.length} threads`);
+        }
+        // Avoid Gmail API rate limits
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
-
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      console.log(`[email-digest] ${account.name}: done fetching ${threads.length} threads`);
     }
+
+    const totalThreads = Object.keys(threadsById).length;
+    console.log(`[email-digest] Total threads to categorize: ${totalThreads}`);
 
     return {
       ...state,
       threadsById,
+      refreshTokensByThread,
     };
   })
 
-  // Batch categorize all threads
-  .prompt('Categorize all threads', categorizePrompt, {
+  // Batch categorize all threads — uses snippet (already in metadata), no body fetch needed
+  .prompt('Categorize all threads', { ...categorizePrompt, client: liteClient }, {
     over: (state) => Object.values(state.threadsById),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to categorize thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
   })
 
   // Build unified email list from categorization results
   .step('Build categorized emails', ({ state }) => {
+    console.log(`[email-digest] Categorized ${state.categorized.length} threads`);
+    const counts: Record<string, number> = {};
+    for (const [_, result] of state.categorized as [RawThread, { category: EmailCategory }][]) {
+      counts[result.category] = (counts[result.category] || 0) + 1;
+    }
+    console.log(`[email-digest] Categories: ${Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+
     const emails: CategorizedEmail[] = state.categorized
       .filter(([_, result]: [RawThread, { category: EmailCategory }]) => result.category !== 'skip')
       .map(([thread, result]: [RawThread, { category: EmailCategory }]) => ({
@@ -81,27 +137,116 @@ const emailDigestBrain = brain({
         enrichment: null as EnrichmentData,
       }));
 
-    return {
-      ...state,
-      emails,
-    };
+    console.log(`[email-digest] ${emails.length} emails to process (after removing ${counts['skip'] || 0} skipped)`);
+
+    const { threadsById: _, categorized: __, ...rest } = state;
+    return { ...rest, emails };
   })
 
-  // Batch enrich categories that need enrichment
-  .prompt('Enrich children emails', enrichChildrenPrompt, {
-    over: (state) => byCategory(state.emails, 'children').map((e) => e.thread),
+  .guard(({ state }) => state.emails.length > 0, 'Has emails to process')
+
+  // Batch enrich categories — fetch body on-demand per thread
+  .prompt('Enrich children emails', {
+    ...enrichChildrenPrompt,
+    client: liteClient,
+    template: async (thread: RawThread & { refreshToken: string }) => {
+      const body = await fetchBody(thread.threadId, thread.refreshToken);
+      return enrichChildrenPrompt.template({ ...thread, body });
+    },
+  }, {
+    over: (state) => byCategory(state.emails, 'children').map((e: any) => ({
+      ...e.thread,
+      refreshToken: state.refreshTokensByThread[e.thread.threadId],
+    })),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to enrich children thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
   })
-  .prompt('Enrich billing emails', enrichBillingPrompt, {
-    over: (state) => byCategory(state.emails, 'billing').map((e) => e.thread),
+  .prompt('Enrich billing emails', {
+    ...enrichBillingPrompt,
+    client: liteClient,
+    template: async (thread: RawThread & { refreshToken: string }) => {
+      const body = await fetchBody(thread.threadId, thread.refreshToken);
+      return enrichBillingPrompt.template({ ...thread, body });
+    },
+  }, {
+    over: (state) => byCategory(state.emails, 'billing').map((e: any) => ({
+      ...e.thread,
+      refreshToken: state.refreshTokensByThread[e.thread.threadId],
+    })),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to enrich billing thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
   })
-  .prompt('Enrich receipt emails', enrichReceiptsPrompt, {
-    over: (state) => byCategory(state.emails, 'receipts').map((e) => e.thread),
+  .prompt('Enrich receipt emails', {
+    ...enrichReceiptsPrompt,
+    client: liteClient,
+    template: async (thread: RawThread & { refreshToken: string }) => {
+      const body = await fetchBody(thread.threadId, thread.refreshToken);
+      return enrichReceiptsPrompt.template({ ...thread, body });
+    },
+  }, {
+    over: (state) => byCategory(state.emails, 'receipts').map((e: any) => ({
+      ...e.thread,
+      refreshToken: state.refreshTokensByThread[e.thread.threadId],
+    })),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to enrich receipt thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
   })
-  .prompt('Enrich newsletter emails', enrichNewslettersPrompt, {
-    over: (state) => byCategory(state.emails, 'newsletters').map((e) => e.thread),
+  .prompt('Enrich newsletter emails', {
+    ...enrichNewslettersPrompt,
+    client: liteClient,
+    template: async (thread: RawThread & { refreshToken: string }) => {
+      const body = await fetchBody(thread.threadId, thread.refreshToken);
+      return enrichNewslettersPrompt.template({ ...thread, body });
+    },
+  }, {
+    over: (state) => byCategory(state.emails, 'newsletters').map((e: any) => ({
+      ...e.thread,
+      refreshToken: state.refreshTokensByThread[e.thread.threadId],
+    })),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to enrich newsletter thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
   })
-  .prompt('Enrich financial emails', enrichFinancialPrompt, {
-    over: (state) => byCategory(state.emails, 'financialNotifications').map((e) => e.thread),
+  .prompt('Enrich financial emails', {
+    ...enrichFinancialPrompt,
+    client: liteClient,
+    template: async (thread: RawThread & { refreshToken: string }) => {
+      const body = await fetchBody(thread.threadId, thread.refreshToken);
+      return enrichFinancialPrompt.template({ ...thread, body });
+    },
+  }, {
+    over: (state) => byCategory(state.emails, 'financialNotifications').map((e: any) => ({
+      ...e.thread,
+      refreshToken: state.refreshTokensByThread[e.thread.threadId],
+    })),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to enrich financial thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
+  })
+  .prompt('Enrich shipping emails', {
+    ...enrichShippingPrompt,
+    client: liteClient,
+    template: async (thread: RawThread & { refreshToken: string }) => {
+      const body = await fetchBody(thread.threadId, thread.refreshToken);
+      return enrichShippingPrompt.template({ ...thread, body });
+    },
+  }, {
+    over: (state) => byCategory(state.emails, 'shipping').map((e: any) => ({
+      ...e.thread,
+      refreshToken: state.refreshTokensByThread[e.thread.threadId],
+    })),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to enrich shipping thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
   })
 
   // Merge enrichment data back into unified email list
@@ -111,6 +256,7 @@ const emailDigestBrain = brain({
     const receiptsEnriched = (state.receiptsEnriched || []) as [RawThread, ReceiptsEmailInfo][];
     const newslettersEnriched = (state.newslettersEnriched || []) as [RawThread, NewsletterEmailInfo][];
     const financialEnriched = (state.financialEnriched || []) as [RawThread, FinancialEmailInfo][];
+    const shippingEnriched = (state.shippingEnriched || []) as [RawThread, ShippingEmailInfo][];
 
     // Build lookup maps from enrichment results
     const childrenMap = new Map(childrenEnriched.map(([t, info]) => [t.threadId, info]));
@@ -118,6 +264,7 @@ const emailDigestBrain = brain({
     const receiptsMap = new Map(receiptsEnriched.map(([t, info]) => [t.threadId, info]));
     const newslettersMap = new Map(newslettersEnriched.map(([t, info]) => [t.threadId, info]));
     const financialMap = new Map(financialEnriched.map(([t, info]) => [t.threadId, info]));
+    const shippingMap = new Map(shippingEnriched.map(([t, info]) => [t.threadId, info]));
 
     // Merge enrichment into unified list
     const enrichedEmails = state.emails.map((email: CategorizedEmail) => {
@@ -134,6 +281,8 @@ const emailDigestBrain = brain({
         enrichment = { type: 'newsletters', info: newslettersMap.get(id)! };
       } else if (financialMap.has(id)) {
         enrichment = { type: 'financial', info: financialMap.get(id)! };
+      } else if (shippingMap.has(id)) {
+        enrichment = { type: 'shipping', info: shippingMap.get(id)! };
       }
 
       return { ...email, enrichment };
@@ -141,12 +290,12 @@ const emailDigestBrain = brain({
 
     // Clean up intermediate enrichment data
     const {
-      categorized: _categorized,
       childrenEnriched: _childrenEnriched,
       billingEnriched: _billingEnriched,
       receiptsEnriched: _receiptsEnriched,
       newslettersEnriched: _newslettersEnriched,
       financialEnriched: _financialEnriched,
+      shippingEnriched: _shippingEnriched,
       ...cleanedState
     } = state;
 
@@ -156,13 +305,64 @@ const emailDigestBrain = brain({
     };
   })
 
-  // Generate summaries for categories that need them
-  .prompt('Summarize npm', summarizeNpmPrompt)
-  .prompt('Summarize security alerts', summarizeSecurityAlertsPrompt)
-  .prompt('Summarize confirmation codes', summarizeConfirmationCodesPrompt)
-  .prompt('Summarize reminders', summarizeRemindersPrompt)
-  .prompt('Summarize financial', summarizeFinancialPrompt)
-  .prompt('Summarize shipping', summarizeShippingPrompt)
+  // Generate summaries — hydrate bodies on-demand per category
+  .prompt('Summarize npm', {
+    ...summarizeNpmPrompt,
+    client: liteClient,
+    template: async (state: any) => {
+      const s = await withBodies(state, 'npm');
+      return summarizeNpmPrompt.template(s);
+    },
+  })
+  .prompt('Summarize security alerts', {
+    ...summarizeSecurityAlertsPrompt,
+    client: liteClient,
+    template: async (state: any) => {
+      const s = await withBodies(state, 'securityAlerts');
+      return summarizeSecurityAlertsPrompt.template(s);
+    },
+  })
+  .prompt('Summarize confirmation codes', {
+    ...summarizeConfirmationCodesPrompt,
+    client: liteClient,
+    template: async (state: any) => {
+      const s = await withBodies(state, 'confirmationCodes');
+      return summarizeConfirmationCodesPrompt.template(s);
+    },
+  })
+  .prompt('Summarize reminders', {
+    ...summarizeRemindersPrompt,
+    client: liteClient,
+    template: async (state: any) => {
+      const s = await withBodies(state, 'reminders');
+      return summarizeRemindersPrompt.template(s);
+    },
+  })
+  .prompt('Summarize financial', {
+    ...summarizeFinancialPrompt,
+    client: liteClient,
+    template: async (state: any) => {
+      const s = await withBodies(state, 'financialNotifications');
+      return summarizeFinancialPrompt.template(s);
+    },
+  })
+  .prompt('Summarize shipping', {
+    ...summarizeShippingPrompt,
+    client: liteClient,
+    template: async (thread: RawThread & { refreshToken: string }) => {
+      const body = await fetchBody(thread.threadId, thread.refreshToken);
+      return summarizeShippingPrompt.template({ ...thread, body });
+    },
+  }, {
+    over: (state) => byCategory(state.emails, 'shipping').map((e: any) => ({
+      ...e.thread,
+      refreshToken: state.refreshTokensByThread[e.thread.threadId],
+    })),
+    error: (thread: any, error: any) => {
+      console.error(`[email-digest] Failed to summarize shipping thread "${thread.subject}": ${error.message}`);
+      return null;
+    },
+  })
 
   // Merge summaries into final structure
   .step('Build summaries', ({ state }) => {
@@ -173,7 +373,15 @@ const emailDigestBrain = brain({
     if (state.confirmationCodesSummary?.summary) summaries.confirmationCodes = state.confirmationCodesSummary.summary;
     if (state.remindersSummary?.summary) summaries.reminders = state.remindersSummary.summary;
     if (state.financialSummary?.summary) summaries.financial = state.financialSummary.summary;
-    if (state.shippingSummary?.summary) summaries.shipping = state.shippingSummary.summary;
+
+    // Build shipping summary from per-email summaries
+    const shippingSummaries = (state.shippingSummary || []) as [RawThread, { summary: string }][];
+    if (shippingSummaries.length > 0) {
+      summaries.shipping = shippingSummaries
+        .map(([_, result]) => result.summary)
+        .filter(Boolean)
+        .join('; ');
+    }
 
     // Clean up intermediate summary data
     const {
@@ -194,10 +402,6 @@ const emailDigestBrain = brain({
 
   .step('Generate unified summary page', async ({ state, pages, env }) => {
     const { emails, summaries } = state;
-
-    if (emails.length === 0) {
-      return { ...state, sessionId: '', pageUrl: '' };
-    }
 
     if (!pages) {
       throw new Error('Pages service not available');
@@ -222,11 +426,7 @@ const emailDigestBrain = brain({
     return { ...state, sessionId, pageUrl: `${env.origin}/pages/${slug}` };
   })
 
-  .step('Send notification', async ({ state, ntfy }) => {
-    if (!state.pageUrl) {
-      return state;
-    }
-
+  .step('Send notification', async ({ state }) => {
     const { emails } = state;
 
     // Count by category
@@ -262,10 +462,6 @@ const emailDigestBrain = brain({
   })
 
   .step('Wait for archive confirmation', ({ state }) => {
-    if (!state.sessionId) {
-      return state;
-    }
-
     const webhook = archiveWebhook(state.sessionId);
 
     return {
@@ -274,11 +470,7 @@ const emailDigestBrain = brain({
     };
   })
 
-  .step('Archive threads', async ({ state, response, gmail }) => {
-    if (!state.sessionId) {
-      return { ...state, archived: false, archivedCount: 0 };
-    }
-
+  .step('Archive threads', async ({ state, response }) => {
     const webhookResponse = response as { threadIds: string[]; confirmed: boolean } | undefined;
 
     if (!webhookResponse?.confirmed) {

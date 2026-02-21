@@ -63,6 +63,12 @@ export interface FinancialEmailInfo {
   amount: string | null;
 }
 
+export interface ShippingEmailInfo {
+  sender: string;
+  item: string;
+  status: string;
+}
+
 // Discriminated union for enrichment data
 export type EnrichmentData =
   | { type: 'children'; info: ChildrenEmailInfo }
@@ -70,6 +76,7 @@ export type EnrichmentData =
   | { type: 'receipts'; info: ReceiptsEmailInfo }
   | { type: 'newsletters'; info: NewsletterEmailInfo }
   | { type: 'financial'; info: FinancialEmailInfo }
+  | { type: 'shipping'; info: ShippingEmailInfo }
   | null;
 
 // Unified email entry - everything about one email in one place

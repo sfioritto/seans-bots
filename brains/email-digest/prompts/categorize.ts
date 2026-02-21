@@ -8,7 +8,7 @@ Categorize this email into exactly ONE category. Choose the BEST fit.
 
 From: ${thread.from}
 Subject: ${thread.subject}
-Body: ${thread.body}
+Snippet: ${thread.snippet}
 
 STEP 1 - CHECK IF THIS IS A NEWSLETTER OR MASS EMAIL:
 Look at the email body content carefully. Is this a newsletter? Signs of a newsletter:

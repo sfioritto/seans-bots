@@ -1,9 +1,11 @@
-import { google } from 'googleapis';
-import type { gmail_v1 } from 'googleapis';
-
 /**
  * Gmail service for reading emails from multiple accounts
+ * Uses direct REST API calls (no googleapis SDK) for Cloudflare Workers compatibility
  */
+
+// =============================================================================
+// Types
+// =============================================================================
 
 interface GmailThread {
   threadId: string;
@@ -34,45 +36,243 @@ interface AttachmentInfo {
   data: string | null;
 }
 
+interface SendMessageOptions {
+  to: string;
+  subject: string;
+  body: string;
+}
+
+// Gmail API response types (replacing gmail_v1.Schema$* types)
+interface GmailMessagePartHeader {
+  name?: string;
+  value?: string;
+}
+
+interface GmailMessagePartBody {
+  attachmentId?: string;
+  size?: number;
+  data?: string;
+}
+
+interface GmailMessagePart {
+  partId?: string;
+  mimeType?: string;
+  filename?: string;
+  headers?: GmailMessagePartHeader[];
+  body?: GmailMessagePartBody;
+  parts?: GmailMessagePart[];
+}
+
+interface GmailMessage {
+  id?: string;
+  threadId?: string;
+  labelIds?: string[];
+  snippet?: string;
+  internalDate?: string;
+  payload?: GmailMessagePart;
+  raw?: string;
+}
+
+interface GmailThreadResponse {
+  id?: string;
+  snippet?: string;
+  messages?: GmailMessage[];
+}
+
+interface GmailThreadListResponse {
+  threads?: Array<{ id?: string; snippet?: string }>;
+  nextPageToken?: string;
+}
+
+interface GmailAttachmentResponse {
+  size?: number;
+  data?: string;
+}
+
+interface GmailSendResponse {
+  id?: string;
+  threadId?: string;
+  labelIds?: string[];
+}
+
+interface TokenResponse {
+  access_token: string;
+  expires_in: number;
+  token_type: string;
+}
+
+// =============================================================================
+// Base64 Utilities (Cloudflare Workers compatible - no Node.js Buffer)
+// =============================================================================
+
 /**
- * Create an authenticated Gmail client for a specific account
+ * Encode a string to base64url format
  */
-function createGmailClient(refreshToken: string): gmail_v1.Gmail {
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GMAIL_CLIENT_ID,
-    process.env.GMAIL_CLIENT_SECRET,
-    'urn:ietf:wg:oauth:2.0:oob'
-  );
-
-  oauth2Client.setCredentials({
-    refresh_token: refreshToken
-  });
-
-  return google.gmail({ version: 'v1', auth: oauth2Client });
+function encodeBase64Url(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 /**
- * Decode base64url encoded message body
+ * Decode base64url encoded data to a UTF-8 string
+ */
+function decodeBase64Url(data: string): string {
+  // Convert base64url to standard base64
+  let base64 = data.replace(/-/g, '+').replace(/_/g, '/');
+  // Add padding if needed
+  while (base64.length % 4) {
+    base64 += '=';
+  }
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+/**
+ * Decode base64url encoded message body (wrapper with error handling)
  */
 function decodeBody(data: string | undefined): string {
   if (!data) return '';
 
   try {
-    return Buffer.from(
-      data.replace(/-/g, '+').replace(/_/g, '/'),
-      'base64'
-    ).toString('utf-8');
+    return decodeBase64Url(data);
   } catch (error) {
     console.error('Error decoding message body:', error);
     return '';
   }
 }
 
+// =============================================================================
+// OAuth2 Token Management
+// =============================================================================
+
+const tokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
+
+/**
+ * Get an access token using a refresh token (cached until near expiry)
+ */
+async function getAccessToken(refreshToken: string): Promise<string> {
+  const cached = tokenCache.get(refreshToken);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.accessToken;
+  }
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: process.env.GMAIL_CLIENT_ID!,
+      client_secret: process.env.GMAIL_CLIENT_SECRET!,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`OAuth2 token refresh failed: ${response.status} - ${errorBody}`);
+  }
+
+  const data = await response.json() as TokenResponse;
+
+  // Cache with 60s safety margin before expiry
+  tokenCache.set(refreshToken, {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+  });
+
+  return data.access_token;
+}
+
+// =============================================================================
+// Gmail API Helper
+// =============================================================================
+
+const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1';
+
+/**
+ * Make an authenticated call to the Gmail API with retry on rate limits
+ */
+async function gmailApiCall<T>(
+  accessToken: string,
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const maxRetries = 5;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${GMAIL_API_BASE}${endpoint}`, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      });
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      if (attempt < maxRetries) {
+        const backoff = Math.min(1000 * Math.pow(2, attempt), 32000);
+        console.warn(`[gmail] Fetch failed (${fetchError.name}: ${fetchError.message}), retrying in ${backoff}ms (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, backoff));
+        continue;
+      }
+      throw new Error(`Gmail API fetch failed after ${maxRetries} retries: ${fetchError.message}`);
+    }
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      return response.json() as Promise<T>;
+    }
+
+    if (response.status === 429 && attempt < maxRetries) {
+      const retryAfter = response.headers.get('Retry-After');
+      const backoff = retryAfter
+        ? parseInt(retryAfter, 10) * 1000
+        : Math.min(1000 * Math.pow(2, attempt), 32000);
+      console.warn(`[gmail] Rate limited, retrying in ${backoff}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+      continue;
+    }
+
+    const errorBody = await response.text();
+    throw new Error(`Gmail API error: ${response.status} - ${errorBody}`);
+  }
+
+  throw new Error(`Gmail API error: max retries exceeded for ${endpoint}`);
+}
+
+// =============================================================================
+// Message Parsing Helpers
+// =============================================================================
+
+/**
+ * Extract header value from message headers
+ */
+function getHeader(headers: GmailMessagePartHeader[] | undefined, name: string): string {
+  if (!headers) return '';
+  const header = headers.find(h => h.name?.toLowerCase() === name.toLowerCase());
+  return header?.value || '';
+}
+
 /**
  * Extract body content from Gmail message payload
  * Returns both text and HTML versions when available, clearly labeled
  */
-function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
+function extractBody(payload: GmailMessagePart | undefined): string {
   if (!payload) return '';
 
   // Try to get body from the main payload (single-part message)
@@ -85,7 +285,7 @@ function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
     let textBody = '';
     let htmlBody = '';
 
-    function findParts(parts: gmail_v1.Schema$MessagePart[]): void {
+    function findParts(parts: GmailMessagePart[]): void {
       for (const part of parts) {
         if (part.mimeType === 'text/plain' && part.body?.data && !textBody) {
           textBody = decodeBody(part.body.data);
@@ -115,12 +315,12 @@ function extractBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
 /**
  * Extract both text/plain and text/html body content from Gmail message payload
  */
-function extractBodyParts(payload: gmail_v1.Schema$MessagePart | undefined): BodyParts {
+function extractBodyParts(payload: GmailMessagePart | undefined): BodyParts {
   const result: BodyParts = { text: '', html: null };
 
   if (!payload) return result;
 
-  function findParts(part: gmail_v1.Schema$MessagePart): void {
+  function findParts(part: GmailMessagePart): void {
     if (part.mimeType === 'text/plain' && part.body?.data && !result.text) {
       result.text = decodeBody(part.body.data);
     }
@@ -149,12 +349,12 @@ function extractBodyParts(payload: gmail_v1.Schema$MessagePart | undefined): Bod
 /**
  * Extract attachment information from Gmail message payload
  */
-function extractAttachments(payload: gmail_v1.Schema$MessagePart | undefined): AttachmentInfo[] {
+function extractAttachments(payload: GmailMessagePart | undefined): AttachmentInfo[] {
   const attachments: AttachmentInfo[] = [];
 
   if (!payload) return attachments;
 
-  function findAttachments(part: gmail_v1.Schema$MessagePart): void {
+  function findAttachments(part: GmailMessagePart): void {
     // Check if this part is an attachment (has filename and is not a body part)
     const filename = part.filename;
     const mimeType = part.mimeType || 'application/octet-stream';
@@ -188,17 +388,16 @@ function extractAttachments(payload: gmail_v1.Schema$MessagePart | undefined): A
  * Fetch attachment data for large attachments that aren't inline
  */
 async function fetchAttachmentData(
-  gmail: gmail_v1.Gmail,
+  accessToken: string,
   messageId: string,
   attachmentId: string
 ): Promise<string> {
-  const response = await gmail.users.messages.attachments.get({
-    userId: 'me',
-    messageId,
-    id: attachmentId
-  });
+  const response = await gmailApiCall<GmailAttachmentResponse>(
+    accessToken,
+    `/users/me/messages/${messageId}/attachments/${attachmentId}`
+  );
 
-  return response.data.data || '';
+  return response.data || '';
 }
 
 /**
@@ -274,14 +473,9 @@ function buildForwardedMessage(params: {
   return parts.join('\r\n');
 }
 
-/**
- * Extract header value from message headers
- */
-function getHeader(headers: gmail_v1.Schema$MessagePartHeader[] | undefined, name: string): string {
-  if (!headers) return '';
-  const header = headers.find(h => h.name?.toLowerCase() === name.toLowerCase());
-  return header?.value || '';
-}
+// =============================================================================
+// Gmail API Operations
+// =============================================================================
 
 /**
  * Search for threads in a Gmail account
@@ -289,19 +483,41 @@ function getHeader(headers: gmail_v1.Schema$MessagePartHeader[] | undefined, nam
 async function searchThreads(
   refreshToken: string,
   query: string = 'is:unread',
-  maxResults: number = 100
+  maxResults?: number
 ): Promise<{ threadId: string }[]> {
-  const gmail = createGmailClient(refreshToken);
+  const accessToken = await getAccessToken(refreshToken);
 
-  const response = await gmail.users.threads.list({
-    userId: 'me',
-    q: query,
-    maxResults
-  });
+  const allThreads: { threadId: string }[] = [];
+  let pageToken: string | undefined;
 
-  return (response.data.threads || []).map(thread => ({
-    threadId: thread.id || ''
-  }));
+  do {
+    const params = new URLSearchParams({ q: query });
+    if (maxResults !== undefined) {
+      params.set('maxResults', maxResults.toString());
+    }
+    if (pageToken) {
+      params.set('pageToken', pageToken);
+    }
+
+    const response = await gmailApiCall<GmailThreadListResponse>(
+      accessToken,
+      `/users/me/threads?${params}`
+    );
+
+    const threads = (response.threads || []).map(thread => ({
+      threadId: thread.id || ''
+    }));
+    allThreads.push(...threads);
+
+    pageToken = response.nextPageToken;
+
+    // If a maxResults was specified and we've reached it, stop
+    if (maxResults !== undefined && allThreads.length >= maxResults) {
+      return allThreads.slice(0, maxResults);
+    }
+  } while (pageToken);
+
+  return allThreads;
 }
 
 /**
@@ -311,15 +527,13 @@ async function getThreadDetails(
   refreshToken: string,
   threadId: string
 ): Promise<GmailThread> {
-  const gmail = createGmailClient(refreshToken);
+  const accessToken = await getAccessToken(refreshToken);
 
-  const response = await gmail.users.threads.get({
-    userId: 'me',
-    id: threadId,
-    format: 'full'
-  });
+  const thread = await gmailApiCall<GmailThreadResponse>(
+    accessToken,
+    `/users/me/threads/${threadId}?format=full`
+  );
 
-  const thread = response.data;
   const messages = thread.messages || [];
 
   // Collect all message IDs
@@ -348,22 +562,65 @@ async function getThreadDetails(
 }
 
 /**
+ * Get thread metadata without body (uses format=metadata for lighter payloads)
+ */
+async function getThreadMetadata(
+  refreshToken: string,
+  threadId: string
+): Promise<Omit<GmailThread, 'body'>> {
+  const accessToken = await getAccessToken(refreshToken);
+
+  const thread = await gmailApiCall<GmailThreadResponse>(
+    accessToken,
+    `/users/me/threads/${threadId}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`
+  );
+
+  const messages = thread.messages || [];
+
+  // Collect all message IDs
+  const messageIds = messages.map(msg => msg.id || '').filter(Boolean);
+
+  // Sort messages by internalDate to find the latest
+  const sortedMessages = [...messages].sort((a, b) => {
+    const dateA = parseInt(a.internalDate || '0', 10);
+    const dateB = parseInt(b.internalDate || '0', 10);
+    return dateB - dateA;
+  });
+
+  const latestMessage = sortedMessages[0];
+  const headers = latestMessage?.payload?.headers;
+
+  return {
+    threadId: thread.id || '',
+    subject: getHeader(headers, 'Subject'),
+    from: getHeader(headers, 'From'),
+    date: getHeader(headers, 'Date'),
+    snippet: latestMessage?.snippet || '',
+    messageCount: messages.length,
+    messageIds
+  };
+}
+
+/**
  * Archive messages by removing the INBOX label
  */
 async function archiveMessages(
   refreshToken: string,
   messageIds: string[]
 ): Promise<void> {
-  const gmail = createGmailClient(refreshToken);
+  const accessToken = await getAccessToken(refreshToken);
 
   for (const messageId of messageIds) {
-    await gmail.users.messages.modify({
-      userId: 'me',
-      id: messageId,
-      requestBody: {
-        removeLabelIds: ['INBOX']
+    await gmailApiCall<GmailMessage>(
+      accessToken,
+      `/users/me/messages/${messageId}/modify`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          removeLabelIds: ['INBOX']
+        })
       }
-    });
+    );
 
     // Small delay to avoid rate limiting
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -377,16 +634,19 @@ async function markAsRead(
   refreshToken: string,
   messageIds: string[]
 ): Promise<void> {
-  const gmail = createGmailClient(refreshToken);
+  const accessToken = await getAccessToken(refreshToken);
 
   for (const messageId of messageIds) {
-    await gmail.users.messages.modify({
-      userId: 'me',
-      id: messageId,
-      requestBody: {
-        removeLabelIds: ['UNREAD']
+    await gmailApiCall<GmailMessage>(
+      accessToken,
+      `/users/me/messages/${messageId}/modify`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          removeLabelIds: ['UNREAD']
+        })
       }
-    });
+    );
 
     // Small delay to avoid rate limiting
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -396,17 +656,11 @@ async function markAsRead(
 /**
  * Send an email message
  */
-interface SendMessageOptions {
-  to: string;
-  subject: string;
-  body: string;
-}
-
 async function sendMessage(
   refreshToken: string,
   options: SendMessageOptions
 ): Promise<{ id: string; threadId: string }> {
-  const gmail = createGmailClient(refreshToken);
+  const accessToken = await getAccessToken(refreshToken);
 
   // Build RFC 2822 formatted email
   const messageParts = [
@@ -417,20 +671,20 @@ async function sendMessage(
     options.body
   ];
 
-  const raw = Buffer.from(messageParts.join('\r\n'))
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  const raw = encodeBase64Url(messageParts.join('\r\n'));
 
-  const response = await gmail.users.messages.send({
-    userId: 'me',
-    requestBody: { raw }
-  });
+  const response = await gmailApiCall<GmailSendResponse>(
+    accessToken,
+    '/users/me/messages/send',
+    {
+      method: 'POST',
+      body: JSON.stringify({ raw })
+    }
+  );
 
   return {
-    id: response.data.id || '',
-    threadId: response.data.threadId || ''
+    id: response.id || '',
+    threadId: response.threadId || ''
   };
 }
 
@@ -443,16 +697,14 @@ async function forwardMessage(
   to: string,
   note?: string
 ): Promise<{ id: string; threadId: string }> {
-  const gmail = createGmailClient(refreshToken);
+  const accessToken = await getAccessToken(refreshToken);
 
   // Get the original message with full MIME structure
-  const response = await gmail.users.messages.get({
-    userId: 'me',
-    id: messageId,
-    format: 'full'
-  });
+  const message = await gmailApiCall<GmailMessage>(
+    accessToken,
+    `/users/me/messages/${messageId}?format=full`
+  );
 
-  const message = response.data;
   const headers = message.payload?.headers;
 
   // Extract headers
@@ -479,7 +731,7 @@ async function forwardMessage(
 
     // If attachment data is not inline, fetch it
     if (!data && info.attachmentId) {
-      data = await fetchAttachmentData(gmail, messageId, info.attachmentId);
+      data = await fetchAttachmentData(accessToken, messageId, info.attachmentId);
       // Small delay to avoid rate limiting
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -505,20 +757,20 @@ async function forwardMessage(
     attachments
   });
 
-  const raw = Buffer.from(newMessage)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  const raw = encodeBase64Url(newMessage);
 
-  const sendResponse = await gmail.users.messages.send({
-    userId: 'me',
-    requestBody: { raw }
-  });
+  const sendResponse = await gmailApiCall<GmailSendResponse>(
+    accessToken,
+    '/users/me/messages/send',
+    {
+      method: 'POST',
+      body: JSON.stringify({ raw })
+    }
+  );
 
   return {
-    id: sendResponse.data.id || '',
-    threadId: sendResponse.data.threadId || ''
+    id: sendResponse.id || '',
+    threadId: sendResponse.threadId || ''
   };
 }
 
@@ -542,6 +794,10 @@ function getConfiguredAccounts(): GmailAccount[] {
   return accounts;
 }
 
+// =============================================================================
+// Exported Gmail Service
+// =============================================================================
+
 /**
  * Gmail service interface for use in brains
  */
@@ -560,6 +816,11 @@ export const gmail = {
    * Get full details of a thread (latest message + all message IDs)
    */
   getThreadDetails,
+
+  /**
+   * Get thread metadata without body (lighter API call)
+   */
+  getThreadMetadata,
 
   /**
    * Archive messages by removing from inbox

@@ -12,13 +12,13 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@ai-sdk/google": "^2.0.44",
-    "@ai-sdk/openai": "^2.0.80",
-    "@positronic/client-vercel": "^0.0.52",
-    "@positronic/cloudflare": "^0.0.52",
-    "@positronic/core": "^0.0.52",
-    "ai": "^5.0.108",
-    "googleapis": "^164.1.0"
+    "@ai-sdk/google": "^3.0.30",
+    "@ai-sdk/openai": "^3.0.30",
+    "@positronic/client-vercel": "^0.0.62",
+    "@positronic/cloudflare": "^0.0.62",
+    "@positronic/core": "^0.0.62",
+    "@positronic/gen-ui-components": "^0.0.62",
+    "ai": "^6.0.0"
   },
   "devDependencies": {
     "@jest/globals": "^30.0.4",
