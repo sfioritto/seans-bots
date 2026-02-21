@@ -18,6 +18,10 @@ export const ntfy = {
     }
 
     const headers: HeadersInit = {};
+    const token = process.env.NTFY_TOKEN;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     if (clickUrl) {
       headers['Click'] = clickUrl;
     }
