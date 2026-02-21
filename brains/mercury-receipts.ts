@@ -393,17 +393,8 @@ Include ALL requests in the matches array, even those with no matches.`;
   })
 
   // Step 9: Wait for user confirmation
-  .step('Wait for confirmation', ({ state }) => {
-    if (!state.sessionId) {
-      console.log('No session, completing without waiting');
-      return state;
-    }
-
-    return {
-      state,
-      waitFor: [mercuryReceiptsWebhook(state.sessionId as string)],
-    };
-  })
+  .guard(({ state }) => !!state.sessionId, 'Has session')
+  .wait('Wait for confirmation', ({ state }) => mercuryReceiptsWebhook(state.sessionId as string))
 
   // Step 10: Forward selected receipts and archive Mercury threads
   .step('Forward receipts and archive', async ({ state, response, gmail }) => {

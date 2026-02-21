@@ -8,7 +8,7 @@ const hnTopStoriesBrain = brain({
   .step('Fetch top stories from today', async ({ state, hn }) => {
     const stories = await hn.getStories({
       daysBack: 1,
-      minPoints: 10,
+      minPoints: 100,
       frontPageOnly: true,
       limit: 5,
     });
@@ -65,6 +65,7 @@ Return a summary for each story.
       stories: storiesWithSummaries,
     };
   })
+  .guard(({ state }) => state.storySummaries.summaries.length > 0, 'Has saved stories')
   .ui('Select stories to save', {
     template: (state) => `
 Create a page showing Hacker News top stories from today that the user can select to save.
@@ -91,13 +92,10 @@ Make it look clean and modern with good spacing.
       selectedStories: z.array(z.string()).describe('Array of story IDs that were selected'),
     }),
   })
-  .step('Notify and wait for selection', ({ state, page }) => {
+  .wait('Notify and wait for selection', async ({ state, page, ntfy }) => {
     console.log(`\n📋 Select your favorite stories: ${page.url}\n`);
-
-    return {
-      state,
-      waitFor: [page.webhook],
-    };
+    await ntfy.send(`📰 ${state.stories.length} top Hacker News stories`, page.url);
+    return page.webhook;
   })
   .step('Save selected stories', ({ state, response }) => {
     const selectedIds = response.selectedStories;

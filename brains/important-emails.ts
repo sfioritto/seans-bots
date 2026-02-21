@@ -186,9 +186,9 @@ Make it look clean and modern with good spacing.
     }),
   })
 
-  .step('Notify and wait', async ({ state, page }) => {
+  .wait('Notify and wait for selection', async ({ state, page }) => {
     await ntfy.send(`📧 ${state.importantThreads.length} important emails`, page.url);
-    return { state, waitFor: [page.webhook] };
+    return page.webhook;
   })
 
   .step('Handle response', async ({ state, response }) => {

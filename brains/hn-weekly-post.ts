@@ -67,12 +67,9 @@ const hnWeeklyPostBrain = brain({
       });
     }
 
-    // Wait for feedback via thread reply
-    return {
-      state,
-      waitFor: [slackWebhook(threadTs)],
-    };
+    return { ...state, threadTs };
   })
+  .wait('Wait for feedback', ({ state }) => slackWebhook(state.threadTs))
   .step('Extract feedback from webhook', ({ state, response }) => {
     // The webhook gives us the thread reply directly
     const webhookResponse = response;
