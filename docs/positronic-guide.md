@@ -42,10 +42,10 @@ import { brain } from '@positronic/core';
 
 ### Configuring Services
 
-To add project-wide services, modify the `brain.ts` file in the root directory:
+To add project-wide services, modify the `brain.ts` file in the root directory using `createBrain()`:
 
 ```typescript
-import { brain as coreBrain, type Brain } from '@positronic/core';
+import { createBrain } from '@positronic/core';
 
 // Define your services
 interface ProjectServices {
@@ -59,28 +59,25 @@ interface ProjectServices {
   };
 }
 
-// Export the wrapped brain function
-export function brain(
-  brainConfig: string | { title: string; description?: string }
-) {
-  return coreBrain(brainConfig)
-    .withServices({
-      logger: {
-        info: (msg) => console.log(`[${new Date().toISOString()}] INFO: ${msg}`),
-        error: (msg) => console.error(`[${new Date().toISOString()}] ERROR: ${msg}`)
+// Export the project brain factory
+export const brain = createBrain({
+  services: {
+    logger: {
+      info: (msg) => console.log(`[<%= '${new Date().toISOString()}' %>] INFO: <%= '${msg}' %>`),
+      error: (msg) => console.error(`[<%= '${new Date().toISOString()}' %>] ERROR: <%= '${msg}' %>`)
+    },
+    database: {
+      get: async (key) => {
+        // Your database implementation
+        return localStorage.getItem(key);
       },
-      database: {
-        get: async (key) => {
-          // Your database implementation
-          return localStorage.getItem(key);
-        },
-        set: async (key, value) => {
-          // Your database implementation
-          localStorage.setItem(key, JSON.stringify(value));
-        }
+      set: async (key, value) => {
+        // Your database implementation
+        localStorage.setItem(key, JSON.stringify(value));
       }
-    });
-}
+    }
+  }
+});
 ```
 
 Now all brains automatically have access to these services:
@@ -158,7 +155,7 @@ Use `.env` files for configuration:
 ANTHROPIC_API_KEY=your-key-here
 OPENAI_API_KEY=your-key-here
 
-# Backend-specific
+# Backend-specific (Cloudflare example)
 CLOUDFLARE_ACCOUNT_ID=your-account-id
 CLOUDFLARE_API_TOKEN=your-api-token
 ```
@@ -216,16 +213,16 @@ interface ProjectServices {
 // Configure with base URL and auth
 const api = {
   get: async (path: string) => {
-    const response = await fetch(`https://api.example.com${path}`, {
-      headers: { 'Authorization': `Bearer ${process.env.API_KEY}` }
+    const response = await fetch(`https://api.example.com<%= '${path}' %>`, {
+      headers: { 'Authorization': `Bearer <%= '${process.env.API_KEY}' %>` }
     });
     return response.json();
   },
   post: async (path: string, data: any) => {
-    const response = await fetch(`https://api.example.com${path}`, {
+    const response = await fetch(`https://api.example.com<%= '${path}' %>`, {
       method: 'POST',
-      headers: { 
-        'Authorization': `Bearer ${process.env.API_KEY}`,
+      headers: {
+        'Authorization': `Bearer <%= '${process.env.API_KEY}' %>`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(data)
@@ -239,5 +236,5 @@ const api = {
 
 - **Documentation**: https://positronic.dev
 - **CLI Help**: `px --help`
-- **Brain DSL Guide**: `/docs/brain-dsl-guide.md`
+- **Brain DSL Guide**: `/docs/brain-dsl-guide.md` (includes UI steps for generating forms)
 - **Testing Guide**: `/docs/brain-testing-guide.md`

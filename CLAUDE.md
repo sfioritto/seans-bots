@@ -9,6 +9,7 @@ This is a Positronic project - an AI-powered framework for building and running 
 ## Project Structure
 
 - **`/brains`** - AI workflow definitions using the Brain DSL
+- **`/webhooks`** - Webhook definitions for external integrations (auto-discovered)
 - **`/resources`** - Files and documents that brains can access via the resource system
 - **`/tests`** - Test files for brains (kept separate to avoid deployment issues)
 - **`/docs`** - Documentation including brain testing guide
@@ -37,7 +38,8 @@ For testing guidance, see `/docs/brain-testing-guide.md`
 The Brain DSL provides a fluent API for defining AI workflows:
 
 ```typescript
-import { brain } from '@positronic/core';
+// Import from the project brain wrapper (see positronic-guide.md)
+import { brain } from '../brain.js';
 
 const myBrain = brain('my-brain')
   .step('Initialize', ({ state }) => ({
@@ -45,12 +47,12 @@ const myBrain = brain('my-brain')
     initialized: true
   }))
   .step('Process', async ({ state, resources }) => {
-    // Access resources
-    const doc = await resources.get('example.md');
+    // Access resources with type-safe API
+    const content = await resources.example.loadText();
     return {
       ...state,
       processed: true,
-      content: doc.content
+      content
     };
   });
 
@@ -61,6 +63,79 @@ export default myBrain;
 
 Resources are files that brains can access during execution. They're stored in the `/resources` directory and are automatically typed based on the manifest.
 
+## Webhooks
+
+Webhooks allow brains to pause execution and wait for external events (like form submissions, API callbacks, or user approvals). Webhooks are auto-discovered from the `/webhooks` directory.
+
+### Creating a Webhook
+
+Create a file in the `/webhooks` directory with a default export:
+
+```typescript
+// webhooks/approval.ts
+import { createWebhook } from '@positronic/core';
+import { z } from 'zod';
+
+const approvalWebhook = createWebhook(
+  'approval',  // webhook name (should match filename)
+  z.object({   // response schema - what the webhook returns to the brain
+    approved: z.boolean(),
+    reviewerNote: z.string().optional(),
+  }),
+  async (request: Request) => {
+    // Parse the incoming request and return identifier + response
+    const body = await request.json();
+    return {
+      type: 'webhook',
+      identifier: body.requestId,  // matches the identifier used in waitFor
+      response: {
+        approved: body.approved,
+        reviewerNote: body.note,
+      },
+    };
+  }
+);
+
+export default approvalWebhook;
+```
+
+### Using Webhooks in Brains
+
+Import the webhook and use `.wait()` to pause execution:
+
+```typescript
+import { brain } from '../brain.js';
+import approvalWebhook from '../webhooks/approval.js';
+
+export default brain('approval-workflow')
+  .step('Request approval', ({ state }) => ({
+    ...state, status: 'pending',
+  }))
+  .wait('Wait for approval', ({ state }) => approvalWebhook(state.requestId))
+  .step('Process approval', ({ state, response }) => ({
+    ...state,
+    status: response.approved ? 'approved' : 'rejected',
+    reviewerNote: response.reviewerNote,
+  }));
+```
+
+### CSRF Tokens for Pages with Forms
+
+If your brain generates a custom HTML page with a form that submits to a webhook, you must include a CSRF token. Without a token, the server will reject the submission.
+
+1. Generate a token with `generateFormToken()` from `@positronic/core`
+2. Add `<input type="hidden" name="__positronic_token" value="${token}">` to the form
+3. Pass the token when creating the webhook registration: `myWebhook(identifier, token)`
+
+The `.ui()` step handles this automatically. See `/docs/brain-dsl-guide.md` for full examples.
+
+### How Auto-Discovery Works
+
+- Place webhook files in `/webhooks` directory
+- Each file must have a default export using `createWebhook()`
+- The dev server generates `_webhookManifest.ts` automatically
+- Webhook name comes from the filename (e.g., `approval.ts` → `'approval'`)
+
 ## Development Workflow
 
 1. Define your brain in `/brains`
@@ -69,7 +144,6 @@ Resources are files that brains can access during execution. They're stored in t
 4. Deploy using backend-specific commands
 
 ## Backend-Specific Notes
-
 
 ### Cloudflare Workers
 
@@ -87,7 +161,6 @@ wrangler login
 # Deploy
 px deploy
 ```
-
 
 ## Best Practices
 

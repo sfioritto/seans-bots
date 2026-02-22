@@ -443,7 +443,7 @@ function formatSummaryAsBullets(summary: string): string {
   return items.map((item) => `<li>${escapeHtml(item)}</li>`).join('');
 }
 
-export function generateUnifiedPage(processed: ProcessedEmails, sessionId: string, webhookUrl: string): string {
+export function generateUnifiedPage(processed: ProcessedEmails, sessionId: string, webhookUrl: string, formToken: string): string {
   const { emails, summaries } = processed;
 
   // Helper to get emails by category
@@ -1118,6 +1118,7 @@ export function generateUnifiedPage(processed: ProcessedEmails, sessionId: strin
   </div>
 
   <form class="archive-form" action="${webhookUrl}" method="POST">
+    <input type="hidden" name="__positronic_token" value="${formToken}">
     <input type="hidden" name="sessionId" value="${sessionId}">
     <input type="hidden" name="allThreadIds" value='${JSON.stringify(allThreadIds)}'>
 

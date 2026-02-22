@@ -105,6 +105,26 @@ kill $(lsof -ti:38291)
 - Always clean up by killing the server process when done
 - The log file contains timestamped entries with [INFO], [ERROR], and [WARN] prefixes
 
+## Guard Clauses
+
+Use `.guard()` to short-circuit a brain when a condition isn't met:
+
+```typescript
+brain('approval-example')
+  .step('Init', () => ({ needsApproval: true, data: [] }))
+  .guard(({ state }) => state.data.length > 0, 'Has data')
+  // everything below only runs if guard passes
+  .step('Process', ({ state }) => ({ ...state, processed: true }))
+  .step('Continue', ({ state }) => ({ ...state, done: true }));
+```
+
+Key rules:
+- Predicate returns `true` to continue, `false` to skip all remaining steps
+- The predicate is synchronous and receives `{ state, options }`
+- State type is unchanged after a guard
+- Optional title as second argument: `.guard(predicate, 'Check condition')`
+- See `/docs/brain-dsl-guide.md` for more details
+
 ## Brain DSL Type Inference
 
 The Brain DSL has very strong type inference capabilities. **Important**: You should NOT explicitly specify types on the state object as it flows through steps. The types are automatically inferred from the previous step.
@@ -182,6 +202,58 @@ brain('validation-example')
 
 Most generated brains should not have try-catch blocks. Only use them when the error state is meaningful to subsequent steps in the workflow.
 
+## UI Steps for Form Generation
+
+When you need to collect user input, use the `.ui()` method. The pattern is:
+1. `.ui()` generates the page
+2. Next step gets `page.url` and `page.webhook`
+3. Notify users, then use `.wait()` with `page.webhook`
+4. Step after `.wait()` gets form data in `response`
+
+```typescript
+import { z } from 'zod';
+
+brain('feedback-collector')
+  .step('Initialize', ({ state }) => ({
+    ...state,
+    userName: 'John',
+  }))
+  // Generate the form
+  .ui('Collect Feedback', {
+    template: (state) => <%= '\`' %>
+      Create a feedback form for <%= '${state.userName}' %>:
+      - Rating (1-5)
+      - Comments textarea
+      - Submit button
+    <%= '\`' %>,
+    responseSchema: z.object({
+      rating: z.number().min(1).max(5),
+      comments: z.string(),
+    }),
+  })
+  // Notify users
+  .step('Notify', async ({ state, page, slack }) => {
+    await slack.post('#feedback', `Fill out: <%= '${page.url}' %>`);
+    return state;
+  })
+  // Wait for form submission
+  .wait('Wait for submission', ({ page }) => page.webhook)
+  // Form data comes through response (not page)
+  .step('Process', ({ state, response }) => ({
+    ...state,
+    rating: response.rating,     // Typed from responseSchema
+    comments: response.comments,
+  }));
+```
+
+Key points:
+- `page.url` - where to send users
+- `page.webhook` - use with `.wait()` to pause for submission
+- `response` - form data arrives here (in step after `.wait()`)
+- You control how users are notified (Slack, email, etc.)
+
+See `/docs/brain-dsl-guide.md` for more UI step examples.
+
 ## Service Organization
 
 When implementing services for the project brain, consider creating a `services/` directory at the root of your project to keep service implementations organized and reusable:
@@ -197,22 +269,20 @@ services/
 Then in your `brain.ts` (at the project root):
 
 ```typescript
+import { createBrain } from '@positronic/core';
 import gmail from './services/gmail.js';
 import slack from './services/slack.js';
 import database from './services/database.js';
 import analytics from './services/analytics.js';
 
-export function brain(
-  brainConfig: string | { title: string; description?: string }
-) {
-  return coreBrain(brainConfig)
-    .withServices({
-      gmail,
-      slack,
-      database,
-      analytics
-    });
-}
+export const brain = createBrain({
+  services: {
+    gmail,
+    slack,
+    database,
+    analytics
+  }
+});
 ```
 
 This keeps your service implementations separate from your brain logic and makes them easier to test and maintain.
@@ -402,7 +472,7 @@ describe('FeedbackProcessor', () => {
 });
 
 // Step 2: Create minimal brain implementation
-import { brain } from '@positronic/core';
+import { brain } from '../brain.js';
 import { z } from 'zod';
 
 const feedbackBrain = brain('feedback-processor')
@@ -417,7 +487,7 @@ export default feedbackBrain;
 // Step 4: Add sentiment analysis step
   .prompt('Analyze sentiment', {
     template: ({ feedback }) =>
-      `Analyze the sentiment of this feedback: "${feedback}"`,
+      <%= '\`Analyze the sentiment of this feedback: "${feedback}"\`' %>,
     outputSchema: {
       schema: z.object({
         sentiment: z.enum(['positive', 'neutral', 'negative']),
@@ -431,7 +501,7 @@ export default feedbackBrain;
 // Step 6: Add response generation
   .prompt('Generate response', {
     template: ({ sentimentAnalysis, feedback }) =>
-      `Generate a brief response to this ${sentimentAnalysis.sentiment} feedback: "${feedback}"`,
+      <%= '\`Generate a brief response to this ${sentimentAnalysis.sentiment} feedback: "${feedback}"\`' %>,
     outputSchema: {
       schema: z.object({
         response: z.string()

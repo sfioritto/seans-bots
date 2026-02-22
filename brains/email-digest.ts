@@ -1,4 +1,5 @@
 import { brain } from '../brain.js';
+import { generateFormToken } from '@positronic/core';
 import { VercelClient } from '@positronic/client-vercel';
 import { google } from '@ai-sdk/google';
 import archiveWebhook from '../webhooks/archive.js';
@@ -413,6 +414,7 @@ const emailDigestBrain = brain({
     };
 
     const sessionId = crypto.randomUUID();
+    const formToken = generateFormToken();
     const slug = `email-digest-${sessionId.slice(0, 8)}`;
 
     const tempHtml = '<html><body>Loading...</body></html>';
@@ -420,10 +422,10 @@ const emailDigestBrain = brain({
 
     const webhookUrl = `${env.origin}/webhooks/archive`;
 
-    const html = generateUnifiedPage(processedData, sessionId, webhookUrl);
+    const html = generateUnifiedPage(processedData, sessionId, webhookUrl, formToken);
     await pages.update(slug, html);
 
-    return { ...state, sessionId, pageUrl: `${env.origin}/pages/${slug}` };
+    return { ...state, sessionId, formToken, pageUrl: `${env.origin}/pages/${slug}` };
   })
 
   .step('Send notification', async ({ state }) => {
@@ -461,7 +463,7 @@ const emailDigestBrain = brain({
     return state;
   })
 
-  .wait('Wait for archive confirmation', ({ state }) => archiveWebhook(state.sessionId))
+  .wait('Wait for archive confirmation', ({ state }) => archiveWebhook(state.sessionId, state.formToken))
 
   .step('Archive threads', async ({ state, response }) => {
     const webhookResponse = response as { threadIds: string[]; confirmed: boolean } | undefined;
