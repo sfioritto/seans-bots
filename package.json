@@ -14,11 +14,11 @@
   "dependencies": {
     "@ai-sdk/google": "^3.0.30",
     "@ai-sdk/openai": "^3.0.30",
-    "@positronic/client-vercel": "file:../positronic/packages/client-vercel",
-    "@positronic/cloudflare": "file:../positronic/packages/cloudflare",
-    "@positronic/core": "file:../positronic/packages/core",
-    "@positronic/gen-ui-components": "file:../positronic/packages/gen-ui-components",
-    "@positronic/mem0": "file:../positronic/packages/mem0",
+    "@positronic/client-vercel": "^0.0.64",
+    "@positronic/cloudflare": "^0.0.64",
+    "@positronic/core": "^0.0.64",
+    "@positronic/gen-ui-components": "^0.0.64",
+    "@positronic/mem0": "^0.0.64",
     "ai": "^6.0.0"
   },
   "devDependencies": {
