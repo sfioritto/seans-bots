@@ -463,8 +463,11 @@ const emailDigestBrain = brain({
     return state;
   })
 
-  .wait('Wait for archive confirmation', ({ state }) => archiveWebhook(state.sessionId, state.formToken))
-
+  .wait(
+    'Wait for archive confirmation',
+    ({ state }) => archiveWebhook(state.sessionId, state.formToken),
+    { timeout: "3 hours" }
+  )
   .step('Archive threads', async ({ state, response }) => {
     const webhookResponse = response as { threadIds: string[]; confirmed: boolean } | undefined;
 
