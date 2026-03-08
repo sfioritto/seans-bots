@@ -4,5 +4,5 @@ import { google } from '@ai-sdk/google';
 
 export const runner = new BrainRunner({
   adapters: [],
-  client: new VercelClient(google('gemini-2.5-flash-lite')),
+  client: new VercelClient(google('gemini-3.1-flash-lite-preview')),
 });

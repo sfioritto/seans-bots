@@ -6,7 +6,7 @@ import archiveWebhook from '../webhooks/archive.js';
 import gmail from '../services/gmail.js';
 import ntfy from '../services/ntfy.js';
 
-const liteClient = new VercelClient(google('gemini-flash-lite-latest'));
+const liteClient = new VercelClient(google('gemini-3.1-flash-lite-preview'));
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
 import type {
   ProcessedEmails,
