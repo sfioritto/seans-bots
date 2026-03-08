@@ -5,6 +5,7 @@ import { google } from '@ai-sdk/google';
 import archiveWebhook from '../webhooks/archive.js';
 import gmail from '../services/gmail.js';
 import ntfy from '../services/ntfy.js';
+import mercuryReceiptsBrain from './mercury-receipts.js';
 
 const liteClient = new VercelClient(google('gemini-3.1-flash-lite-preview'));
 import { generateUnifiedPage } from './email-digest/templates/unified-page.js';
@@ -71,6 +72,7 @@ const emailDigestBrain = brain({
   title: 'email-digest',
   description: 'Categorizes inbox emails and extracts key info like action items and bill amounts',
 })
+  .brain("Match mercury receipts", mercuryReceiptsBrain, ({ state }) => state)
   .step('Fetch all inbox threads from all accounts', async ({ state }) => {
     const accounts = gmail.getAccounts();
     const threadsById: Record<string, RawThread> = {};
